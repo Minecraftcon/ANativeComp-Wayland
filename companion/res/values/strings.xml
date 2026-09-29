@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ANativeDrawer</string>
+    <string name="notification_title">ANativeDrawer Wayland</string>
+    <string name="notification_text">Wayland is running (Socket: wayland-0)</string>
+    <string name="notification_subtext">Tap to open configuration</string>
+
+    <string name="tab_overview">Overview</string>
+    <string name="tab_sessions">Sessions</string>
+    <string name="tab_preferences">Preferences</string>
+    <string name="tab_tools">Tools &amp; Logs</string>
+
+    <string name="status_running">🟢 RUNNING</string>
+    <string name="status_stopped">🔴 STOPPED</string>
+    <string name="btn_restart">Restart</string>
+    <string name="btn_stop">Stop</string>
+    <string name="btn_start">Start</string>
+
+    <string name="active_tabs">Active Tabs / Windows</string>
+    <string name="ram_usage">Live Memory Usage</string>
+    <string name="session_manager">Session Manager</string>
+</resources>

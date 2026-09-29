@@ -17,11 +17,15 @@ cmake_install.cmake
 build.ninja
 
 # Binaries (kept out of tree; the build dir is ignored anyway)
-andwayland
-ANativeDrawer
+/andwayland
+/ANativeDrawer
 interactive_window
 *_client
 hello_window
+companion/build/
+*.keystore
+packaging/*.zip
+packaging/magisk/system/
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Vendored third-party sources

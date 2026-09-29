@@ -23,6 +23,8 @@
 #include <cstring>
 #include <memory>
 #include <thread>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #define LOG_TAG "andwayland"
 #define ALOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -145,11 +147,22 @@ int main(int argc, char* argv[]) {
     ALOGI("  Display: %dx%d", bridge->displayWidth(), bridge->displayHeight());
     ALOGI("Set WAYLAND_DISPLAY=%s in client environment.", socketName);
 
+    // Export telemetry for system companion UI
+    mkdir("/data/wayland", 0777);
+    FILE* fpStatus = fopen("/data/wayland/status.json", "w");
+    if (fpStatus) {
+        fprintf(fpStatus, "{\n  \"pid\": %d,\n  \"socket\": \"%s\",\n  \"width\": %d,\n  \"height\": %d,\n  \"activeSurfaces\": 0\n}\n",
+                getpid(), socketName, bridge->displayWidth(), bridge->displayHeight());
+        fclose(fpStatus);
+        chmod("/data/wayland/status.json", 0666);
+    }
+
     // ── 4. Run Wayland event loop (main thread blocks here; evdev events are dispatched via wl_event_loop fds) ──
     server.run();
 
     // ── 5. Cleanup ────────────────────────────────────────────────────────────
     ALOGI("Shutting down...");
+    unlink("/data/wayland/status.json");
     if (testLayer) sfBridge.destroyLayer(testLayer);
     seat->stop();
     sfBridge.shutdown();

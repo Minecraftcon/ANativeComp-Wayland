@@ -27,5 +27,10 @@ export WAYLAND_DISPLAY=wayland-0
 export LD_LIBRARY_PATH=/system/lib64
 
 exec /system/bin/andwayland --socket wayland-0 >> "$LOG" 2>&1 &
+PID=$!
+echo "ANativeDrawer started (pid $PID)" >> "$LOG"
 
-echo "ANativeDrawer started (pid $!)" >> "$LOG"
+# Start companion monitor foreground service
+sleep 2
+am start-foreground-service com.andwayland.companion/.CompositorMonitorService >> "$LOG" 2>&1 || true
+

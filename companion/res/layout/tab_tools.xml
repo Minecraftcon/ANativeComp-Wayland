@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/bg_main"
+    android:paddingStart="20dp"
+    android:paddingEnd="20dp"
+    android:paddingTop="16dp"
+    android:paddingBottom="24dp">
+
+    <!-- Quick Launch Section -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="QUICK LAUNCH"
+        android:textColor="@color/text_muted"
+        android:textSize="11sp"
+        android:letterSpacing="0.08"
+        android:textStyle="bold"
+        android:layout_marginBottom="10dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginBottom="20dp">
+
+        <Button
+            android:id="@+id/btn_launch_foot"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="6dp"
+            android:text="foot"
+            android:textColor="@color/text_primary"
+            android:textSize="12sp"
+            android:background="@drawable/button_accent"
+            android:minHeight="0dp" />
+
+        <Button
+            android:id="@+id/btn_launch_thunar"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:layout_marginEnd="6dp"
+            android:text="Thunar"
+            android:textColor="@color/text_primary"
+            android:textSize="12sp"
+            android:background="@drawable/button_accent"
+            android:minHeight="0dp" />
+
+        <Button
+            android:id="@+id/btn_launch_galculator"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1"
+            android:text="galculator"
+            android:textColor="@color/text_primary"
+            android:textSize="12sp"
+            android:background="@drawable/button_accent"
+            android:minHeight="0dp" />
+    </LinearLayout>
+
+    <!-- Logs Section -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="10dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="LOG STREAM"
+            android:textColor="@color/text_muted"
+            android:textSize="11sp"
+            android:letterSpacing="0.08"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btn_log_copy"
+            android:layout_width="wrap_content"
+            android:layout_height="28dp"
+            android:text="Copy"
+            android:textSize="11sp"
+            android:textColor="@color/text_primary"
+            android:background="@drawable/button_accent"
+            android:layout_marginEnd="6dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:minHeight="0dp"
+            android:minWidth="0dp" />
+
+        <Button
+            android:id="@+id/btn_log_clear"
+            android:layout_width="wrap_content"
+            android:layout_height="28dp"
+            android:text="Clear"
+            android:textSize="11sp"
+            android:textColor="@color/text_muted"
+            android:background="@drawable/button_accent"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:minHeight="0dp"
+            android:minWidth="0dp" />
+    </LinearLayout>
+
+    <ScrollView
+        android:id="@+id/sv_log_container"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="@drawable/card_background"
+        android:padding="12dp">
+
+        <TextView
+            android:id="@+id/tv_log_content"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="[ANativeDrawer] Monitoring started...\n[andwayland] Listening on socket: /data/wayland/wayland-0"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp"
+            android:fontFamily="monospace" />
+    </ScrollView>
+
+</LinearLayout>

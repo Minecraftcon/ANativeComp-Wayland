@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/bg_main">
+
+    <!-- Clean Header Bar -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp"
+        android:background="@color/bg_main">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ANativeDrawer"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text=" / "
+                android:textColor="@color/text_muted"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/tv_header_subtitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="wayland-0"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp"
+                android:fontFamily="monospace" />
+        </LinearLayout>
+
+        <!-- Subtle Text Status -->
+        <TextView
+            android:id="@+id/tv_header_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="● Running"
+            android:textColor="@color/status_green"
+            android:textSize="12sp"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp" />
+
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
+
+    <!-- Minimalist Tab Bar -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:scrollbars="none"
+        android:background="@color/bg_main">
+
+        <LinearLayout
+            android:id="@+id/tab_bar"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp">
+
+            <Button
+                android:id="@+id/btn_tab_overview"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:layout_marginEnd="6dp"
+                android:text="Overview"
+                android:textSize="12sp"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/tab_pill_active"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:minHeight="0dp"
+                android:minWidth="0dp" />
+
+            <Button
+                android:id="@+id/btn_tab_sessions"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:layout_marginEnd="6dp"
+                android:text="Clients"
+                android:textSize="12sp"
+                android:textColor="@color/text_secondary"
+                android:background="@drawable/tab_pill_inactive"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:minHeight="0dp"
+                android:minWidth="0dp" />
+
+            <Button
+                android:id="@+id/btn_tab_preferences"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:layout_marginEnd="6dp"
+                android:text="Settings"
+                android:textSize="12sp"
+                android:textColor="@color/text_secondary"
+                android:background="@drawable/tab_pill_inactive"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:minHeight="0dp"
+                android:minWidth="0dp" />
+
+            <Button
+                android:id="@+id/btn_tab_tools"
+                android:layout_width="wrap_content"
+                android:layout_height="30dp"
+                android:text="Logs"
+                android:textSize="12sp"
+                android:textColor="@color/text_secondary"
+                android:background="@drawable/tab_pill_inactive"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:minHeight="0dp"
+                android:minWidth="0dp" />
+
+        </LinearLayout>
+    </HorizontalScrollView>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
+
+    <!-- Tab Content Container -->
+    <FrameLayout
+        android:id="@+id/tab_container"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+</LinearLayout>
