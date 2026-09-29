@@ -22,7 +22,7 @@ import android.util.Log;
 public class CompositorMonitorService extends Service {
 
     private static final String TAG = "CompositorMonitor";
-    private static final String CHANNEL_ID = "wayland_status_channel_v2";
+    private static final String CHANNEL_ID = "wayland_status_channel_v3";
     private static final int NOTIFICATION_ID = 1001;
 
     public static final String ACTION_RESTART = "com.andwayland.companion.ACTION_RESTART";
@@ -30,6 +30,8 @@ public class CompositorMonitorService extends Service {
 
     private HandlerThread workerThread;
     private Handler workerHandler;
+    private Boolean lastReportedRunning = null;
+
     private final Runnable pollRunnable = new Runnable() {
         @Override
         public void run() {
@@ -83,6 +85,7 @@ public class CompositorMonitorService extends Service {
             if (nm != null) {
                 try {
                     nm.deleteNotificationChannel("wayland_status_channel");
+                    nm.deleteNotificationChannel("wayland_status_channel_v2");
                 } catch (Exception ignored) {}
 
                 NotificationChannel channel = new NotificationChannel(
@@ -92,6 +95,8 @@ public class CompositorMonitorService extends Service {
                 );
                 channel.setDescription("Resident status and controls for ANativeDrawer Wayland Compositor");
                 channel.setShowBadge(true);
+                channel.setSound(null, null);
+                channel.enableVibration(false);
                 channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
                 nm.createNotificationChannel(channel);
             }
@@ -137,6 +142,7 @@ public class CompositorMonitorService extends Service {
                 .setSubText(subText)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
+                .setOnlyAlertOnce(true)
                 .setShowWhen(false)
                 .addAction(new Notification.Action.Builder(
                         null, "Configure", pendingIntent).build())
@@ -150,9 +156,14 @@ public class CompositorMonitorService extends Service {
 
     private void updateNotification() {
         try {
-            NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm != null) {
-                nm.notify(NOTIFICATION_ID, buildNotification());
+            CompositorState state = CompositorRepository.getInstance().getStateFlow().getValue();
+            boolean running = state.isRunning;
+            if (lastReportedRunning == null || lastReportedRunning != running) {
+                lastReportedRunning = running;
+                NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nm != null) {
+                    nm.notify(NOTIFICATION_ID, buildNotification());
+                }
             }
         } catch (Exception e) {
             Log.e(TAG, "Failed to update notification", e);
