@@ -48,6 +48,7 @@ third_party/*
 # extracts their own. See HANDOVER.md.
 # ─────────────────────────────────────────────────────────────────────────────
 device-sysroot/
+sysroot-termux/
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Generated Wayland protocol bindings

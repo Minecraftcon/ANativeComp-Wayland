@@ -23,6 +23,16 @@ echo "Copying binaries and libraries..."
 cp -f "$REPO_ROOT/build/andwayland" "$MAGISK_DIR/system/bin/andwayland"
 chmod 755 "$MAGISK_DIR/system/bin/andwayland"
 
+if [ -f "$REPO_ROOT/xwayland/prebuilt/xwayland-satellite" ]; then
+    cp -f "$REPO_ROOT/xwayland/prebuilt/xwayland-satellite" "$MAGISK_DIR/system/bin/xwayland-satellite"
+    chmod 755 "$MAGISK_DIR/system/bin/xwayland-satellite"
+fi
+
+if [ -f "$REPO_ROOT/xwayland/prebuilt/start-xwayland" ]; then
+    cp -f "$REPO_ROOT/xwayland/prebuilt/start-xwayland" "$MAGISK_DIR/system/bin/start-xwayland"
+    chmod 755 "$MAGISK_DIR/system/bin/start-xwayland"
+fi
+
 if [ -f "$REPO_ROOT/third_party/wayland/lib/libwayland-server.so" ]; then
     cp -f "$REPO_ROOT/third_party/wayland/lib/libwayland-server.so" "$MAGISK_DIR/system/lib64/libwayland-server.so"
     chmod 644 "$MAGISK_DIR/system/lib64/libwayland-server.so"

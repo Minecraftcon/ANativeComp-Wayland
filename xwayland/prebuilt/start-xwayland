@@ -1,0 +1,52 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# ─────────────────────────────────────────────────────────────────────────────
+# Rootless Xwayland On-Demand Manager for ANativeDrawer
+# ─────────────────────────────────────────────────────────────────────────────
+
+TERMUX_PREFIX="/data/data/com.termux/files/usr"
+export PATH="$TERMUX_PREFIX/bin:$PATH"
+export LD_LIBRARY_PATH="$TERMUX_PREFIX/lib:$LD_LIBRARY_PATH"
+export XDG_RUNTIME_DIR="/data/wayland"
+export WAYLAND_DISPLAY="wayland-0"
+export DISPLAY=":1"
+
+# Ensure runtime directory exists and is writable
+if [ ! -d "$XDG_RUNTIME_DIR" ]; then
+    mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || true
+    chmod 777 "$XDG_RUNTIME_DIR" 2>/dev/null || true
+fi
+
+# Locate xwayland-satellite binary
+SATELLITE_BIN=""
+if command -v xwayland-satellite >/dev/null 2>&1; then
+    SATELLITE_BIN="xwayland-satellite"
+elif [ -x "$TERMUX_PREFIX/bin/xwayland-satellite" ]; then
+    SATELLITE_BIN="$TERMUX_PREFIX/bin/xwayland-satellite"
+elif [ -x "/system/bin/xwayland-satellite" ]; then
+    SATELLITE_BIN="/system/bin/xwayland-satellite"
+elif [ -x "/data/local/tmp/xwayland-satellite" ]; then
+    SATELLITE_BIN="/data/local/tmp/xwayland-satellite"
+fi
+
+# Start rootless Xwayland on demand
+if ! pgrep -f "xwayland-satellite :1" >/dev/null 2>&1; then
+    if [ -z "$SATELLITE_BIN" ]; then
+        echo "Error: xwayland-satellite binary not found!" >&2
+        exit 1
+    fi
+    rm -f "$TERMUX_PREFIX/tmp/.X11-unix/X1" "/tmp/.X11-unix/X1" 2>/dev/null || true
+    nohup "$SATELLITE_BIN" :1 > "$TERMUX_PREFIX/tmp/xwayland-satellite.log" 2>&1 &
+    
+    # Wait for X11 socket to become ready (up to 3 seconds)
+    for _ in $(seq 1 30); do
+        if [ -S "$TERMUX_PREFIX/tmp/.X11-unix/X1" ] || [ -S "/tmp/.X11-unix/X1" ]; then
+            break
+        fi
+        sleep 0.1
+    done
+fi
+
+# If command arguments were passed, execute them under DISPLAY=:1
+if [ $# -gt 0 ]; then
+    exec "$@"
+fi

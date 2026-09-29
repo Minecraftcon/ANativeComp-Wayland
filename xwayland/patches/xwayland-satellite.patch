@@ -1,0 +1,35 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 36b3968..992b5d9 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -791,8 +791,6 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+ [[package]]
+ name = "smithay-client-toolkit"
+ version = "0.20.0"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "0512da38f5e2b31201a93524adb8d3136276fa4fe4aafab4e1f727a82b534cc0"
+ dependencies = [
+  "bitflags 2.10.0",
+  "cursor-icon",
+@@ -1083,8 +1081,6 @@ dependencies = [
+ [[package]]
+ name = "wayland-cursor"
+ version = "0.31.11"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "447ccc440a881271b19e9989f75726d60faa09b95b0200a9b7eb5cc47c3eeb29"
+ dependencies = [
+  "rustix",
+  "wayland-client",
+diff --git a/Cargo.toml b/Cargo.toml
+index 3ce3053..d55c0d2 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -72,3 +72,8 @@ inherits = "dev"
+ # Shrink bloat in ./target which negatively affects build caching
+ incremental = false
+ debug = false
++
++[patch.crates-io]
++wayland-cursor = { path = "../wayland-cursor" }
++smithay-client-toolkit = { path = "../smithay-client-toolkit" }
++
