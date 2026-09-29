@@ -671,9 +671,18 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                 } else if (ev.code == BTN_LEFT || ev.code == BTN_RIGHT || ev.code == BTN_MIDDLE) {
                     uint32_t btn = ev.code;
                     uint32_t state = ev.value ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED;
-                    if (btn == BTN_LEFT && state == WL_POINTER_BUTTON_STATE_RELEASED) {
-                        if (mImpl->bridge && mImpl->bridge->isMoveGrabActive()) {
-                            mImpl->bridge->endMoveGrab();
+                    if (btn == BTN_LEFT) {
+                        if (state == WL_POINTER_BUTTON_STATE_RELEASED) {
+                            if (mImpl->bridge && mImpl->bridge->isMoveGrabActive()) {
+                                mImpl->bridge->endMoveGrab();
+                            }
+                        } else if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
+                            if (mImpl->bridge && mImpl->currentPointerSurface) {
+                                WaylandSurface* surf = mImpl->bridge->surfaceFromResource(mImpl->currentPointerSurface);
+                                if (surf) {
+                                    mImpl->bridge->activateSurface(surf);
+                                }
+                            }
                         }
                     }
                     uint32_t serial = wl_display_next_serial(mImpl->display);
@@ -721,6 +730,7 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
 
                         // Check if touched on the server-side titlebar
                         if (surf && surf->hasDecor && localY < 0) {
+                            mImpl->bridge->activateSurface(surf);
                             int32_t w = surf->committed.width;
                             if (localX >= w - 44) {
                                 ALOGI("Titlebar: Close button hit for surface %u", surf->id);
@@ -739,6 +749,7 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                         }
 
                         if (surf && surf->resource) {
+                            mImpl->bridge->activateSurface(surf);
                             setKeyboardFocus(surf->resource);
 
                             struct wl_client* targetClient = wl_resource_get_client(surf->resource);

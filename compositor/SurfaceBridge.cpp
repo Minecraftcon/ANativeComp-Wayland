@@ -766,9 +766,9 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
             std::string name = "wl_surface#" + std::to_string(surface->id);
             int32_t z = surface->zOrder;
             if (surface->isSubsurface && surface->parentSurface) {
-                z = surface->parentSurface->zOrder + 5;
-            } else if (surface->isPopup && surface->parentSurface) {
                 z = surface->parentSurface->zOrder + 20;
+            } else if (surface->isPopup && surface->parentSurface) {
+                z = surface->parentSurface->zOrder + 50;
             }
             surface->sfLayer = mSfBridge.createLayer(
                 name,
@@ -811,6 +811,10 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
             surface->committed.width = layerW;
             surface->committed.height = layerH;
             surface->committed.mapped = true;
+
+            if (surface->xdgToplevel) {
+                activateSurface(surface);
+            }
 
             // Propagate position to any existing child subsurfaces
             for (WaylandSurface* sub : surface->subsurfaces) {
@@ -1093,6 +1097,10 @@ void SurfaceBridge::destroySurface(WaylandSurface* surface) {
     if (mGrabSurface == surface) {
         mGrabSurface = nullptr;
     }
+    bool wasActive = (mActiveSurface == surface);
+    if (wasActive) {
+        mActiveSurface = nullptr;
+    }
     if (mSeat) {
         mSeat->notifySurfaceDestroyed(surface->resource);
     }
@@ -1118,14 +1126,35 @@ void SurfaceBridge::destroySurface(WaylandSurface* surface) {
     }
     if (surface->sfLayer) {
         mSfBridge.destroyLayer(surface->sfLayer);
+        surface->sfLayer = nullptr;
     }
     // Frame callbacks are orphaned; destroy them
     for (wl_resource* cb : surface->frameCallbacks) {
         wl_resource_destroy(cb);
     }
     surface->frameCallbacks.clear();
-    mSurfaces.erase(surface->resource);
+
+    wl_resource* res = surface->resource;
+    mSurfaces.erase(res);
     ALOGI("wl_surface destroyed");
+
+    if (wasActive) {
+        WaylandSurface* nextTop = nullptr;
+        int32_t topZ = -1;
+        for (const auto& [r, s] : mSurfaces) {
+            if (s && s->committed.mapped && s->xdgToplevel && !s->isCursor) {
+                if (s->zOrder > topZ) {
+                    topZ = s->zOrder;
+                    nextTop = s.get();
+                }
+            }
+        }
+        if (nextTop) {
+            activateSurface(nextTop);
+        } else if (mSeat) {
+            mSeat->setKeyboardFocus(nullptr);
+        }
+    }
 }
 
 void SurfaceBridge::destroyLayerForSurface(WaylandSurface* surface) {
@@ -1155,9 +1184,15 @@ WaylandSurface* SurfaceBridge::surfaceAt(int32_t screenX, int32_t screenY,
 
         if (screenX >= sx && screenX < sx + sw &&
             screenY >= topY && screenY < sy + sh) {
-            if (surf->zOrder > bestZ) {
+            int32_t effectiveZ = surf->zOrder;
+            if (surf->isPopup && surf->parentSurface) {
+                effectiveZ = surf->parentSurface->zOrder + 50;
+            } else if (surf->isSubsurface && surf->parentSurface) {
+                effectiveZ = surf->parentSurface->zOrder + 20;
+            }
+            if (effectiveZ > bestZ) {
                 best = surf.get();
-                bestZ = surf->zOrder;
+                bestZ = effectiveZ;
             }
         }
     }
@@ -1197,19 +1232,26 @@ void SurfaceBridge::updateDecor(WaylandSurface* surface) {
     tx.setPosition(surface->decorLayer, surface->committed.x, surface->committed.y - h);
     tx.apply();
 
-    // Render titlebar pixels: background #18191B
-    surface->decorBuffer.assign(static_cast<size_t>(w) * h, 0xFF18191B);
+    // Active vs Inactive titlebar theme
+    bool isActive = (surface == mActiveSurface);
+    uint32_t bgColor     = isActive ? 0xFF222428 : 0xFF141517;
+    uint32_t borderColor = isActive ? 0xFF383A40 : 0xFF222326;
+    uint32_t textColor   = isActive ? 0xFFFFFFFF : 0xFF7E8187;
+    uint32_t btnColor    = isActive ? 0xFFE0E0E0 : 0xFF65676C;
+
+    // Render titlebar pixels
+    surface->decorBuffer.assign(static_cast<size_t>(w) * h, bgColor);
 
     // Bottom border line at y = h - 1
     for (int32_t x = 0; x < w; ++x) {
-        surface->decorBuffer[(h - 1) * w + x] = 0xFF2C2D30;
+        surface->decorBuffer[(h - 1) * w + x] = borderColor;
     }
 
     // Window title text
     std::string title = surface->title.empty()
         ? (surface->appId.empty() ? "Window" : surface->appId)
         : surface->title;
-    drawString(surface->decorBuffer.data(), w, h, 14, 11, title.c_str(), 2, 0xFFE6E6E6, w - 140);
+    drawString(surface->decorBuffer.data(), w, h, 14, 11, title.c_str(), 2, textColor, w - 140);
 
     // Sharp Material/Windows style window buttons:
     // 1. Minimize '—': [w - 132 .. w - 89]
@@ -1220,7 +1262,7 @@ void SurfaceBridge::updateDecor(WaylandSurface* surface) {
     int32_t minCx = w - 110;
     for (int32_t y = 17; y <= 18; ++y) {
         for (int32_t x = minCx - 5; x <= minCx + 5; ++x) {
-            if (x >= 0 && x < w) surface->decorBuffer[y * w + x] = 0xFFD0D0D0;
+            if (x >= 0 && x < w) surface->decorBuffer[y * w + x] = btnColor;
         }
     }
 
@@ -1232,7 +1274,7 @@ void SurfaceBridge::updateDecor(WaylandSurface* surface) {
         for (int32_t x = sqX0; x <= sqX1; ++x) {
             if (x >= 0 && x < w) {
                 if (y <= sqY0 + 1 || y >= sqY1 - 1 || x <= sqX0 + 1 || x >= sqX1 - 1) {
-                    surface->decorBuffer[y * w + x] = 0xFFD0D0D0;
+                    surface->decorBuffer[y * w + x] = btnColor;
                 }
             }
         }
@@ -1246,10 +1288,10 @@ void SurfaceBridge::updateDecor(WaylandSurface* surface) {
         if (y >= 0 && y < h) {
             int32_t x1 = clsCx + d;
             int32_t x2 = clsCx - d;
-            if (x1 >= 0 && x1 < w) surface->decorBuffer[y * w + x1] = 0xFFE0E0E0;
-            if (x1 + 1 >= 0 && x1 + 1 < w) surface->decorBuffer[y * w + x1 + 1] = 0xFFE0E0E0;
-            if (x2 >= 0 && x2 < w) surface->decorBuffer[y * w + x2] = 0xFFE0E0E0;
-            if (x2 + 1 >= 0 && x2 + 1 < w) surface->decorBuffer[y * w + x2 + 1] = 0xFFE0E0E0;
+            if (x1 >= 0 && x1 < w) surface->decorBuffer[y * w + x1] = btnColor;
+            if (x1 + 1 >= 0 && x1 + 1 < w) surface->decorBuffer[y * w + x1 + 1] = btnColor;
+            if (x2 >= 0 && x2 < w) surface->decorBuffer[y * w + x2] = btnColor;
+            if (x2 + 1 >= 0 && x2 + 1 < w) surface->decorBuffer[y * w + x2 + 1] = btnColor;
         }
     }
 
@@ -1286,6 +1328,7 @@ void SurfaceBridge::moveSurface(WaylandSurface* surface, int32_t newX, int32_t n
 
 void SurfaceBridge::startMoveGrab(WaylandSurface* surface, int32_t screenX, int32_t screenY) {
     if (!surface) return;
+    activateSurface(surface);
     mGrabSurface = surface;
     mGrabStartX = screenX;
     mGrabStartY = screenY;
@@ -1331,6 +1374,7 @@ void SurfaceBridge::minimizeSurface(WaylandSurface* surface) {
 
 void SurfaceBridge::toggleMaximize(WaylandSurface* surface) {
     if (!surface || !surface->xdgToplevel) return;
+    activateSurface(surface);
     surface->isFullscreen = !surface->isFullscreen;
     struct wl_array states;
     wl_array_init(&states);
@@ -1354,7 +1398,121 @@ void SurfaceBridge::toggleMaximize(WaylandSurface* surface) {
 }
 
 int32_t SurfaceBridge::allocateZOrder() {
-    return mNextZOrder++;
+    mNextZOrder += 100;
+    return mNextZOrder;
+}
+
+void SurfaceBridge::activateSurface(WaylandSurface* surface) {
+    if (!surface) return;
+    WaylandSurface* root = surface;
+    while (root && root->parentSurface) {
+        root = root->parentSurface;
+    }
+    if (!root) return;
+
+    WaylandSurface* old = mActiveSurface;
+    bool changed = (old != root);
+
+    if (changed && old) {
+        // Deactivate old window according to standard Wayland xdg_shell protocol
+        // Only if old's resource is still valid in mSurfaces!
+        bool oldValid = (mSurfaces.find(old->resource) != mSurfaces.end());
+        if (oldValid && old->xdgToplevel) {
+            struct wl_array states;
+            wl_array_init(&states);
+            // Include states EXCEPT XDG_TOPLEVEL_STATE_ACTIVATED
+            if (old->isFullscreen) {
+                uint32_t* f = static_cast<uint32_t*>(wl_array_add(&states, sizeof(uint32_t)));
+                if (f) *f = XDG_TOPLEVEL_STATE_FULLSCREEN;
+            }
+            int32_t w = old->isFullscreen ? mDisplayWidth : 0;
+            int32_t h = old->isFullscreen ? mDisplayHeight : 0;
+            xdg_toplevel_send_configure(old->xdgToplevel, w, h, &states);
+            wl_array_release(&states);
+
+            if (old->xdgSurface && old->resource) {
+                struct wl_client* client = wl_resource_get_client(old->resource);
+                if (client) {
+                    xdg_surface_send_configure(old->xdgSurface, wl_display_next_serial(wl_client_get_display(client)));
+                }
+            }
+        }
+        if (oldValid && old->hasDecor && old->decorLayer) {
+            updateDecor(old);
+        }
+    }
+
+    mActiveSurface = root;
+
+    // Allocate new topmost Z-order band for the activated window
+    int32_t newZ = allocateZOrder();
+    root->zOrder = newZ;
+
+    // Atomically raise root surface, decor layer, and all children
+    SurfaceFlingerBridge::Transaction tx;
+    if (root->sfLayer) {
+        tx.setZOrder(root->sfLayer, newZ);
+    }
+    if (root->decorLayer) {
+        tx.setZOrder(root->decorLayer, newZ + 10);
+    }
+    int32_t subOffset = 20;
+    for (WaylandSurface* sub : root->subsurfaces) {
+        if (sub) {
+            sub->zOrder = newZ + subOffset;
+            if (sub->sfLayer) {
+                tx.setZOrder(sub->sfLayer, newZ + subOffset);
+            }
+            subOffset = std::min(subOffset + 2, 45);
+        }
+    }
+    int32_t popOffset = 50;
+    for (WaylandSurface* pop : root->popups) {
+        if (pop) {
+            pop->zOrder = newZ + popOffset;
+            if (pop->sfLayer) {
+                tx.setZOrder(pop->sfLayer, newZ + popOffset);
+            }
+            popOffset = std::min(popOffset + 2, 95);
+        }
+    }
+    tx.apply();
+
+    // Standard Wayland xdg_shell activation configure event
+    if (root->xdgToplevel) {
+        struct wl_array states;
+        wl_array_init(&states);
+        uint32_t* a = static_cast<uint32_t*>(wl_array_add(&states, sizeof(uint32_t)));
+        if (a) *a = XDG_TOPLEVEL_STATE_ACTIVATED;
+        if (root->isFullscreen) {
+            uint32_t* f = static_cast<uint32_t*>(wl_array_add(&states, sizeof(uint32_t)));
+            if (f) *f = XDG_TOPLEVEL_STATE_FULLSCREEN;
+        }
+        int32_t w = root->isFullscreen ? mDisplayWidth : 0;
+        int32_t h = root->isFullscreen ? mDisplayHeight : 0;
+        xdg_toplevel_send_configure(root->xdgToplevel, w, h, &states);
+        wl_array_release(&states);
+
+        if (root->xdgSurface && root->resource) {
+            struct wl_client* client = wl_resource_get_client(root->resource);
+            if (client) {
+                xdg_surface_send_configure(root->xdgSurface, wl_display_next_serial(wl_client_get_display(client)));
+            }
+        }
+    }
+
+    // Update server-side decor titlebar
+    if (root->hasDecor && root->decorLayer) {
+        updateDecor(root);
+    }
+
+    // Dispatch Wayland wl_keyboard enter/leave via SeatManager
+    if (mSeat && root->resource) {
+        mSeat->setKeyboardFocus(root->resource);
+    }
+
+    ALOGI("activateSurface: Activated window %u ('%s') at z=%d",
+          root->id, root->title.c_str(), newZ);
 }
 
 } // namespace andwayland

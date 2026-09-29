@@ -199,6 +199,10 @@ public:
     void minimizeSurface(WaylandSurface* surface);
     void closeSurface(WaylandSurface* surface);
 
+    // ── Window Focus & Activation (Wayland xdg-shell standard) ───────────────
+    void activateSurface(WaylandSurface* surface);
+    WaylandSurface* getActiveSurface() const { return mActiveSurface; }
+
     // ── Window Movement (Touch & Pointer Drag Grab) ───────────────────────────
     void moveSurface(WaylandSurface* surface, int32_t newX, int32_t newY);
     void startMoveGrab(WaylandSurface* surface, int32_t screenX, int32_t screenY);
@@ -230,6 +234,7 @@ private:
     int32_t               mNextZOrder    = 2000000;
 
     SeatManager*          mSeat          = nullptr;
+    WaylandSurface*       mActiveSurface = nullptr;
 
     // Active drag grab state
     WaylandSurface*       mGrabSurface   = nullptr;
