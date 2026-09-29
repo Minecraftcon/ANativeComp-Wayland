@@ -214,11 +214,29 @@ public class CompositorRepository {
     public void restartDaemon() {
         new Thread(() -> {
             try {
-                String cmd = "pkill -9 andwayland; rm -f /data/wayland/wayland-0* /data/wayland/status.json; " +
-                             "BIN=/system/bin/andwayland; " +
-                             "[ ! -f \"$BIN\" ] && BIN=/data/local/tmp/andwayland; " +
-                             "export LD_LIBRARY_PATH=/data/local/tmp:/system/lib64 XDG_RUNTIME_DIR=/data/wayland WAYLAND_DISPLAY=wayland-0; " +
-                             "$BIN --socket wayland-0 > /data/wayland/andwayland.log 2>&1 &";
+                String cmd = "mkdir -p /data/wayland && chmod 777 /data/wayland; " +
+                             "pkill -9 andwayland 2>/dev/null; " +
+                             "rm -f /data/wayland/wayland-0* /data/wayland/status.json; " +
+                             "BIN=\"\"; " +
+                             "for c in /system/bin/andwayland " +
+                             "/data/adb/modules/andwayland/system/bin/andwayland " +
+                             "/data/adb/modules_update/andwayland/system/bin/andwayland " +
+                             "/data/local/tmp/andwayland; do " +
+                             "  if [ -f \"$c\" ] && [ -x \"$c\" ]; then BIN=\"$c\"; break; fi; " +
+                             "done; " +
+                             "if [ -z \"$BIN\" ]; then " +
+                             "  echo \"[ERROR] andwayland binary not found in system, magisk, or tmp\" >> /data/wayland/andwayland.log; " +
+                             "  exit 1; " +
+                             "fi; " +
+                             "LIBPATH=\"/system/lib64\"; " +
+                             "for d in /data/adb/modules/andwayland/system/lib64 " +
+                             "/data/adb/modules_update/andwayland/system/lib64 " +
+                             "/data/local/tmp; do " +
+                             "  if [ -d \"$d\" ]; then LIBPATH=\"$LIBPATH:$d\"; fi; " +
+                             "done; " +
+                             "echo \"wayland-0\" > /data/wayland/.display; " +
+                             "export LD_LIBRARY_PATH=\"$LIBPATH\" XDG_RUNTIME_DIR=/data/wayland WAYLAND_DISPLAY=wayland-0; " +
+                             "nohup \"$BIN\" --socket wayland-0 >> /data/wayland/andwayland.log 2>&1 < /dev/null &";
                 Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
                 p.waitFor();
                 SystemClock.sleep(800);
@@ -233,7 +251,7 @@ public class CompositorRepository {
     public void stopDaemon() {
         new Thread(() -> {
             try {
-                String cmd = "pkill -9 andwayland; rm -f /data/wayland/wayland-0* /data/wayland/status.json";
+                String cmd = "pkill -9 andwayland 2>/dev/null; rm -f /data/wayland/wayland-0* /data/wayland/status.json";
                 Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
                 p.waitFor();
                 SystemClock.sleep(400);

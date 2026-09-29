@@ -21,12 +21,16 @@ chmod 777 /data/wayland
 # (write it to a known location; client apps source this)
 echo "wayland-0" > /data/wayland/.display
 
+# Determine binary location (overlay or module directory)
+BIN="/system/bin/andwayland"
+[ ! -x "$BIN" ] && BIN="$MODDIR/system/bin/andwayland"
+
 # Start the compositor
 export XDG_RUNTIME_DIR=/data/wayland
 export WAYLAND_DISPLAY=wayland-0
-export LD_LIBRARY_PATH=/system/lib64
+export LD_LIBRARY_PATH=/system/lib64:$MODDIR/system/lib64
 
-/system/bin/andwayland --socket wayland-0 >> "$LOG" 2>&1 &
+nohup "$BIN" --socket wayland-0 >> "$LOG" 2>&1 < /dev/null &
 PID=$!
 echo "ANativeDrawer started (pid $PID)" >> "$LOG"
 
