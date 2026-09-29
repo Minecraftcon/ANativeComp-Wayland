@@ -38,6 +38,36 @@ nohup "$BIN" --socket wayland-0 >> "$LOG" 2>&1 < /dev/null &
 PID=$!
 echo "ANativeDrawer started (pid $PID)" >> "$LOG"
 
+# ─── Rootless Xwayland (via xwayland-satellite) ───────────────────────────────
+# Wait for the Wayland socket to actually appear before launching the bridge.
+# xwayland-satellite connects as a Wayland client; it must not race the compositor.
+XWLOG="/data/wayland/xwayland-satellite.log"
+XWBIN="/system/bin/xwayland-satellite"
+[ ! -x "$XWBIN" ] && XWBIN="$MODDIR/system/bin/xwayland-satellite"
+
+if [ -x "$XWBIN" ]; then
+    SOCKET_WAIT=0
+    while [ ! -S "/data/wayland/wayland-0" ] && [ $SOCKET_WAIT -lt 30 ]; do
+        sleep 1
+        SOCKET_WAIT=$((SOCKET_WAIT + 1))
+    done
+
+    if [ -S "/data/wayland/wayland-0" ]; then
+        # DISPLAY=:0  — xwayland-satellite owns this X display
+        # Xwayland is spawned on-demand when the first X11 client connects.
+        export DISPLAY=:0
+        echo ":0" > /data/wayland/.xdisplay
+        nohup "$XWBIN" >> "$XWLOG" 2>&1 < /dev/null &
+        XWPID=$!
+        echo "xwayland-satellite started (pid $XWPID, DISPLAY=:0)" >> "$LOG"
+    else
+        echo "xwayland-satellite skipped — Wayland socket not ready after 30s" >> "$LOG"
+    fi
+else
+    echo "xwayland-satellite not found, skipping" >> "$LOG"
+fi
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Wait for system_server / ActivityManager to complete boot
 while [ "$(getprop sys.boot_completed)" != "1" ]; do
     sleep 2
