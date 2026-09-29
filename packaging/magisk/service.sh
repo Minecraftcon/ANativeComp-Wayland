@@ -30,11 +30,19 @@ export XDG_RUNTIME_DIR=/data/wayland
 export WAYLAND_DISPLAY=wayland-0
 export LD_LIBRARY_PATH=/system/lib64:$MODDIR/system/lib64
 
+# Clean stale socket & status if left from an unclean shutdown
+rm -f /data/wayland/wayland-0* /data/wayland/status.json
+
 nohup "$BIN" --socket wayland-0 >> "$LOG" 2>&1 < /dev/null &
 PID=$!
 echo "ANativeDrawer started (pid $PID)" >> "$LOG"
 
+# Wait for system_server / ActivityManager to complete boot
+while [ "$(getprop sys.boot_completed)" != "1" ]; do
+    sleep 2
+done
+
 # Start companion monitor foreground service
-sleep 2
+sleep 1
 am start-foreground-service com.andwayland.companion/.CompositorMonitorService >> "$LOG" 2>&1 || true
 

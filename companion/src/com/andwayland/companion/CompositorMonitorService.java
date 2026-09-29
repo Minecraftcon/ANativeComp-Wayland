@@ -22,7 +22,7 @@ import android.util.Log;
 public class CompositorMonitorService extends Service {
 
     private static final String TAG = "CompositorMonitor";
-    private static final String CHANNEL_ID = "wayland_status_channel";
+    private static final String CHANNEL_ID = "wayland_status_channel_v2";
     private static final int NOTIFICATION_ID = 1001;
 
     public static final String ACTION_RESTART = "com.andwayland.companion.ACTION_RESTART";
@@ -79,15 +79,20 @@ public class CompositorMonitorService extends Service {
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID,
-                    "Wayland Compositor Status",
-                    NotificationManager.IMPORTANCE_LOW
-            );
-            channel.setDescription("Resident status and controls for ANativeDrawer Wayland Compositor");
-            channel.setShowBadge(false);
             NotificationManager nm = getSystemService(NotificationManager.class);
             if (nm != null) {
+                try {
+                    nm.deleteNotificationChannel("wayland_status_channel");
+                } catch (Exception ignored) {}
+
+                NotificationChannel channel = new NotificationChannel(
+                        CHANNEL_ID,
+                        "Wayland Compositor Status",
+                        NotificationManager.IMPORTANCE_DEFAULT
+                );
+                channel.setDescription("Resident status and controls for ANativeDrawer Wayland Compositor");
+                channel.setShowBadge(true);
+                channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
                 nm.createNotificationChannel(channel);
             }
         }

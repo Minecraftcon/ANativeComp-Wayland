@@ -28,6 +28,13 @@ if [ -f "$REPO_ROOT/third_party/wayland/lib/libwayland-server.so" ]; then
     chmod 644 "$MAGISK_DIR/system/lib64/libwayland-server.so"
 fi
 
+NDK_LIBCXX="/home/shado/envs/android-ndk-r25c/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+if [ -f "$NDK_LIBCXX" ]; then
+    cp -f "$NDK_LIBCXX" "$MAGISK_DIR/system/lib64/libc++_shared.so"
+    /home/shado/envs/android-ndk-r25c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-unneeded "$MAGISK_DIR/system/lib64/libc++_shared.so"
+    chmod 644 "$MAGISK_DIR/system/lib64/libc++_shared.so"
+fi
+
 echo "Copying companion APK to system/priv-app/..."
 cp -f "$REPO_ROOT/companion/build/ANativeDrawer.apk" "$MAGISK_DIR/system/priv-app/ANativeDrawer/ANativeDrawer.apk"
 chmod 644 "$MAGISK_DIR/system/priv-app/ANativeDrawer/ANativeDrawer.apk"

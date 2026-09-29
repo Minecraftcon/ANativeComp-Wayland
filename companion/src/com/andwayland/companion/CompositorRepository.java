@@ -53,8 +53,11 @@ public class CompositorRepository {
             boolean running = pid > 0;
             String socketPath = "/data/wayland/wayland-0";
             File socketFile = new File(socketPath);
-            if (socketFile.exists()) {
-                running = true;
+            if (!running && socketFile.exists()) {
+                // Stale socket from crashed process, ignore and clean
+                try {
+                    socketFile.delete();
+                } catch (Exception ignored) {}
             }
 
             float currentRamMb = 0.0f;

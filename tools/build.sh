@@ -92,7 +92,7 @@ cmake \
     -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
     -DANDROID_ABI=arm64-v8a \
     -DANDROID_PLATFORM=android-33 \
-    -DANDROID_STL=c++_shared \
+    -DANDROID_STL=c++_static \
     -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
     -DENABLE_XWAYLAND=OFF \
     -DENABLE_DMABUF=ON \

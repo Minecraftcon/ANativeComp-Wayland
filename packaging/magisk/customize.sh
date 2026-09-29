@@ -10,6 +10,9 @@ set_perm "$MODPATH/system/bin/andwayland" 0 0 0755
 if [ -f "$MODPATH/system/lib64/libwayland-server.so" ]; then
     set_perm "$MODPATH/system/lib64/libwayland-server.so" 0 0 0644
 fi
+if [ -f "$MODPATH/system/lib64/libc++_shared.so" ]; then
+    set_perm "$MODPATH/system/lib64/libc++_shared.so" 0 0 0644
+fi
 set_perm "$MODPATH/service.sh" 0 0 0755
 
 ui_print "- Setting up companion app..."
