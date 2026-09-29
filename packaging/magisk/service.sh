@@ -13,9 +13,10 @@ while ! service list 2>/dev/null | grep -q SurfaceFlinger; do
     sleep 1
 done
 
-# Create runtime directory
+# Create runtime directory and compatibility symlink for clients
 mkdir -p /data/wayland
 chmod 777 /data/wayland
+ln -sf /data/wayland /data/local/tmp/wayland
 
 # Set WAYLAND_DISPLAY so other processes can discover the socket
 # (write it to a known location; client apps source this)

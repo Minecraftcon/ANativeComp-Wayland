@@ -218,6 +218,7 @@ public class CompositorRepository {
         new Thread(() -> {
             try {
                 String cmd = "mkdir -p /data/wayland && chmod 777 /data/wayland; " +
+                             "ln -sf /data/wayland /data/local/tmp/wayland; " +
                              "pkill -9 andwayland 2>/dev/null; " +
                              "rm -f /data/wayland/wayland-0* /data/wayland/status.json; " +
                              "BIN=\"\"; " +
