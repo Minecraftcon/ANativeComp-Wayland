@@ -43,6 +43,12 @@ while [ "$(getprop sys.boot_completed)" != "1" ]; do
     sleep 2
 done
 
+# Ensure Magisk SU grant toasts are silenced for companion app
+COMPANION_UID=$(pm list packages -U 2>/dev/null | grep com.andwayland.companion | sed 's/.*uid://' | head -n 1)
+if [ -n "$COMPANION_UID" ]; then
+    magisk --sqlite "INSERT OR REPLACE INTO policies (uid, policy, until, logging, notification) VALUES ($COMPANION_UID, 2, 0, 1, 0);" 2>/dev/null || true
+fi
+
 # Start companion monitor foreground service
 sleep 1
 am start-foreground-service com.andwayland.companion/.CompositorMonitorService >> "$LOG" 2>&1 || true

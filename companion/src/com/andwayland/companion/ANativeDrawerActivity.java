@@ -296,7 +296,6 @@ public class ANativeDrawerActivity extends Activity {
         btnOverviewRestart.setOnClickListener(v -> {
             triggerHaptic();
             CompositorRepository.getInstance().restartDaemon();
-            Toast.makeText(this, "Restarting…", Toast.LENGTH_SHORT).show();
         });
 
         btnOverviewTogglePower.setOnClickListener(v -> {
@@ -304,10 +303,8 @@ public class ANativeDrawerActivity extends Activity {
             CompositorState state = CompositorRepository.getInstance().getStateFlow().getValue();
             if (state.isRunning) {
                 CompositorRepository.getInstance().stopDaemon();
-                Toast.makeText(this, "Stopping compositor…", Toast.LENGTH_SHORT).show();
             } else {
                 CompositorRepository.getInstance().restartDaemon();
-                Toast.makeText(this, "Starting compositor…", Toast.LENGTH_SHORT).show();
             }
         });
     }
@@ -448,17 +445,14 @@ public class ANativeDrawerActivity extends Activity {
         btnLaunchFoot.setOnClickListener(v -> {
             triggerHaptic();
             CompositorRepository.getInstance().launchLinuxApp("foot");
-            Toast.makeText(this, "Launching foot…", Toast.LENGTH_SHORT).show();
         });
         btnLaunchThunar.setOnClickListener(v -> {
             triggerHaptic();
             CompositorRepository.getInstance().launchLinuxApp("thunar");
-            Toast.makeText(this, "Launching Thunar…", Toast.LENGTH_SHORT).show();
         });
         btnLaunchGalculator.setOnClickListener(v -> {
             triggerHaptic();
             CompositorRepository.getInstance().launchLinuxApp("galculator");
-            Toast.makeText(this, "Launching galculator…", Toast.LENGTH_SHORT).show();
         });
 
         btnLogCopy.setOnClickListener(v -> {
@@ -621,12 +615,10 @@ public class ANativeDrawerActivity extends Activity {
 
                     btnFocus.setOnClickListener(v -> {
                         triggerHaptic();
-                        Toast.makeText(this, "Focused: " + session.title, Toast.LENGTH_SHORT).show();
                     });
                     btnKill.setOnClickListener(v -> {
                         triggerHaptic();
                         CompositorRepository.getInstance().killClient(session.pid);
-                        Toast.makeText(this, "Closed " + session.appId, Toast.LENGTH_SHORT).show();
                     });
 
                     llSessionsList.addView(item);

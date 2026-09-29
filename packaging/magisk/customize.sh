@@ -22,4 +22,10 @@ ui_print "- Creating runtime directory..."
 mkdir -p /data/wayland
 chmod 777 /data/wayland
 
+# Silence Magisk SU grant toasts for companion app to prevent popup notification spam
+COMPANION_UID=$(pm list packages -U 2>/dev/null | grep com.andwayland.companion | sed 's/.*uid://' | head -n 1)
+if [ -n "$COMPANION_UID" ]; then
+    magisk --sqlite "INSERT OR REPLACE INTO policies (uid, policy, until, logging, notification) VALUES ($COMPANION_UID, 2, 0, 1, 0);" 2>/dev/null || true
+fi
+
 ui_print "- Installation complete! Reboot to activate."

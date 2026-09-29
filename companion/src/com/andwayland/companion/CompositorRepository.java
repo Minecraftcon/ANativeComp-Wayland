@@ -28,8 +28,23 @@ public class CompositorRepository {
     private float peakRam = 0.0f;
     private long lastDaemonStartTime = System.currentTimeMillis();
 
+    private int pollCount = 0;
+    private List<CompositorState.WaylandSession> cachedSessions = new ArrayList<>();
+
     private CompositorRepository() {
         stateFlow = new StateFlow<>(CompositorState.initial());
+        silenceMagiskNotifications();
+    }
+
+    private void silenceMagiskNotifications() {
+        new Thread(() -> {
+            try {
+                Process p = Runtime.getRuntime().exec(new String[]{
+                        "su", "-c", "magisk --sqlite \"UPDATE policies SET notification=0 WHERE uid=$(id -u);\" 2>/dev/null || true"
+                });
+                p.waitFor();
+            } catch (Exception ignored) {}
+        }).start();
     }
 
     public static CompositorRepository getInstance() {
@@ -49,20 +64,50 @@ public class CompositorRepository {
 
     public void pollSync() {
         try {
-            int pid = findProcessPid("andwayland");
-            boolean running = pid > 0;
             String socketPath = "/data/wayland/wayland-0";
             File socketFile = new File(socketPath);
-            if (!running && socketFile.exists()) {
-                // Stale socket from crashed process, ignore and clean
+            File statusFile = new File("/data/wayland/status.json");
+
+            int pid = -1;
+            int screenW = 684;
+            int screenH = 1520;
+            int activeSurfaces = 0;
+
+            if (statusFile.exists() && statusFile.canRead()) {
+                try (FileInputStream fis = new FileInputStream(statusFile)) {
+                    byte[] data = new byte[(int) statusFile.length()];
+                    int r = fis.read(data);
+                    if (r > 0) {
+                        JSONObject json = new JSONObject(new String(data, 0, r, StandardCharsets.UTF_8));
+                        pid = json.optInt("pid", -1);
+                        screenW = json.optInt("width", screenW);
+                        screenH = json.optInt("height", screenH);
+                        activeSurfaces = json.optInt("activeSurfaces", 0);
+                    }
+                } catch (Exception ignored) {}
+            }
+
+            boolean socketExists = socketFile.exists();
+            boolean running = (pid > 0 && socketExists);
+
+            if (!running && socketExists && pid <= 0) {
+                pid = findProcessPidQuiet("andwayland");
+                running = (pid > 0);
+            }
+
+            if (!running && socketExists) {
                 try {
                     socketFile.delete();
                 } catch (Exception ignored) {}
             }
 
             float currentRamMb = 0.0f;
-            if (pid > 0) {
-                currentRamMb = readProcessRssMb(pid);
+            if (running && pid > 0) {
+                if (pollCount % 2 == 0) {
+                    currentRamMb = readProcessRssMb(pid);
+                } else if (!ramHistory.isEmpty()) {
+                    currentRamMb = ramHistory.get(ramHistory.size() - 1);
+                }
             }
 
             if (currentRamMb > 0) {
@@ -76,27 +121,17 @@ public class CompositorRepository {
                 }
             }
 
-            List<CompositorState.WaylandSession> sessions = scanSessions();
-
-            // Read /data/wayland/status.json if exported by compositor
-            int activeSurfaces = sessions.size();
-            int screenW = 684;
-            int screenH = 1520;
-
-            File statusFile = new File("/data/wayland/status.json");
-            if (statusFile.exists() && statusFile.canRead()) {
-                try (FileInputStream fis = new FileInputStream(statusFile)) {
-                    byte[] data = new byte[(int) statusFile.length()];
-                    int r = fis.read(data);
-                    if (r > 0) {
-                        JSONObject json = new JSONObject(new String(data, 0, r, StandardCharsets.UTF_8));
-                        activeSurfaces = json.optInt("activeSurfaces", activeSurfaces);
-                        screenW = json.optInt("width", screenW);
-                        screenH = json.optInt("height", screenH);
-                    }
-                } catch (Exception ignored) {
+            List<CompositorState.WaylandSession> sessions;
+            if (!running) {
+                sessions = new ArrayList<>();
+                cachedSessions = sessions;
+            } else {
+                if (pollCount % 3 == 0) {
+                    cachedSessions = scanSessionsBatch();
                 }
+                sessions = cachedSessions;
             }
+            pollCount++;
 
             final boolean isRunning = running;
             final int daemonPid = pid;
@@ -127,44 +162,50 @@ public class CompositorRepository {
         }
     }
 
-    private List<CompositorState.WaylandSession> scanSessions() {
+    private List<CompositorState.WaylandSession> scanSessionsBatch() {
         List<CompositorState.WaylandSession> list = new ArrayList<>();
-        String[] candidateApps = new String[]{"thunar", "foot", "galculator", "weston-terminal", "l3afpad"};
-        for (String app : candidateApps) {
-            int pid = findProcessPid(app);
-            if (pid > 0) {
-                float ram = readProcessRssMb(pid);
-                boolean isNativeTouch = "thunar".equals(app) || "galculator".equals(app);
-                String title = app.substring(0, 1).toUpperCase() + app.substring(1) + " Window";
-                list.add(new CompositorState.WaylandSession(
-                        pid,
-                        "org.wayland." + app,
-                        title,
-                        ram > 0 ? ram : 18.5f,
-                        lastDaemonStartTime,
-                        isNativeTouch
-                ));
+        try {
+            String cmd = "for a in thunar foot galculator weston-terminal l3afpad; do " +
+                         "  p=$(pidof $a 2>/dev/null | awk '{print $1}'); " +
+                         "  if [ -n \"$p\" ]; then " +
+                         "    rss=$(grep VmRSS /proc/$p/status 2>/dev/null | awk '{print $2}'); " +
+                         "    echo \"$a $p ${rss:-0}\"; " +
+                         "  fi; " +
+                         "done";
+            Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
+            BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                String[] parts = line.split("\\s+");
+                if (parts.length >= 2) {
+                    String app = parts[0];
+                    int pid = Integer.parseInt(parts[1]);
+                    float ram = 0.0f;
+                    if (parts.length >= 3) {
+                        try {
+                            ram = Float.parseFloat(parts[2]) / 1024.0f;
+                        } catch (Exception ignored) {}
+                    }
+                    boolean isNativeTouch = "thunar".equals(app) || "galculator".equals(app);
+                    String title = app.substring(0, 1).toUpperCase() + app.substring(1) + " Window";
+                    list.add(new CompositorState.WaylandSession(
+                            pid,
+                            "org.wayland." + app,
+                            title,
+                            ram > 0 ? ram : 18.5f,
+                            lastDaemonStartTime,
+                            isNativeTouch
+                    ));
+                }
             }
-        }
+            p.waitFor();
+        } catch (Exception ignored) {}
         return list;
     }
 
-    public static int findProcessPid(String processName) {
-        if ("andwayland".equals(processName)) {
-            File status = new File("/data/wayland/status.json");
-            if (status.exists() && status.canRead()) {
-                try (FileInputStream fis = new FileInputStream(status)) {
-                    byte[] d = new byte[(int) status.length()];
-                    int r = fis.read(d);
-                    if (r > 0) {
-                        JSONObject json = new JSONObject(new String(d, 0, r, StandardCharsets.UTF_8));
-                        int p = json.optInt("pid", -1);
-                        if (p > 0) return p;
-                    }
-                } catch (Exception ignored) {
-                }
-            }
-        }
+    public static int findProcessPidQuiet(String processName) {
         try {
             Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", "pidof " + processName});
             BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream()));
