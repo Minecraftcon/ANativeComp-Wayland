@@ -26,6 +26,7 @@ struct wl_display;
 namespace andwayland {
 
 class SeatManager;
+class SurfaceBridge;
 class SurfaceFlingerBridge;
 struct SFLayer;
 using SFLayerHandle = std::shared_ptr<SFLayer>;
@@ -80,11 +81,26 @@ struct WaylandSurface {
     std::string   appId;
     bool          isFullscreen = false;
 
+    // Subsurface relationship
+    WaylandSurface*              parentSurface = nullptr;
+    std::vector<WaylandSurface*> subsurfaces;
+    int32_t                      subX = 0;
+    int32_t                      subY = 0;
+    bool                         isSubsurface = false;
+
     // Frame callbacks (for client-side frame pacing)
     std::vector<wl_resource*> frameCallbacks;
 
     // Z-order assigned by window manager
     int32_t zOrder = 0x1000;
+
+    // Server-side decoration state
+    SFLayerHandle         decorLayer;
+    int32_t               decorHeight = 36;
+    bool                  hasDecor    = false;
+    bool                  isCursor    = false;
+    SurfaceBridge*        bridge      = nullptr;
+    std::vector<uint32_t> decorBuffer;
 
     // Compositor-owned copy of the last presented frame.
     //
@@ -110,13 +126,13 @@ public:
     // ── Called by WaylandServer global handlers ───────────────────────────────
 
     /** wl_compositor.create_surface */
-    void createSurface(wl_client* client, uint32_t id);
+    void createSurface(wl_client* client, uint32_t id, int version = 5);
 
     /** wl_shm.create_pool */
     void createShmPool(wl_client* client, uint32_t id, int fd, int32_t size);
 
     /** xdg_wm_base.get_xdg_surface */
-    void getXdgSurface(wl_client* client, uint32_t id, wl_resource* surfaceResource);
+    void getXdgSurface(wl_client* client, uint32_t id, wl_resource* surfaceResource, int version = 5);
 
     /** wl_output binding */
     void bindOutput(wl_client* client, uint32_t version, uint32_t id);
@@ -147,10 +163,30 @@ public:
                               int32_t* outLocalY = nullptr);
 
     void setSeatManager(SeatManager* seat) { mSeat = seat; }
+    SeatManager* getSeatManager() const { return mSeat; }
+
+    // ── Server-side Window Decorations (Material/Windows Style) ───────────────
+    void bindXdgDecoration(wl_client* client, uint32_t version, uint32_t id);
+    void getToplevelDecoration(wl_client* client, uint32_t id, wl_resource* toplevel);
+    void updateDecor(WaylandSurface* surface);
+
+    // ── Window Controls ───────────────────────────────────────────────────────
+    void toggleMaximize(WaylandSurface* surface);
+    void minimizeSurface(WaylandSurface* surface);
+    void closeSurface(WaylandSurface* surface);
+
+    // ── Window Movement (Touch & Pointer Drag Grab) ───────────────────────────
+    void moveSurface(WaylandSurface* surface, int32_t newX, int32_t newY);
+    void startMoveGrab(WaylandSurface* surface, int32_t screenX, int32_t screenY);
+    void updateMoveGrab(int32_t screenX, int32_t screenY);
+    void endMoveGrab();
+    bool isMoveGrabActive() const { return mGrabSurface != nullptr; }
 
     // Display info (forwarded from SurfaceFlingerBridge)
     int32_t displayWidth()  const { return mDisplayWidth; }
     int32_t displayHeight() const { return mDisplayHeight; }
+    SurfaceFlingerBridge& getSurfaceFlingerBridge() { return mSfBridge; }
+    void destroyLayerForSurface(WaylandSurface* surface);
 
 private:
     // ── Buffer handling ───────────────────────────────────────────────────────
@@ -170,6 +206,13 @@ private:
     int32_t               mNextZOrder    = 2000000;
 
     SeatManager*          mSeat          = nullptr;
+
+    // Active drag grab state
+    WaylandSurface*       mGrabSurface   = nullptr;
+    int32_t               mGrabStartX    = 0;
+    int32_t               mGrabStartY    = 0;
+    int32_t               mWindowStartX  = 0;
+    int32_t               mWindowStartY  = 0;
 
     // Map: wl_resource* → WaylandSurface
     std::unordered_map<wl_resource*, std::unique_ptr<WaylandSurface>> mSurfaces;

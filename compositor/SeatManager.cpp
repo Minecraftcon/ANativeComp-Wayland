@@ -132,7 +132,18 @@ static const struct wl_keyboard_interface keyboard_iface = {
     .release = keyboard_release,
 };
 
-static void pointer_set_cursor(wl_client*, wl_resource*, uint32_t, wl_resource*, int32_t, int32_t) {}
+static void pointer_set_cursor(wl_client*, wl_resource* resource, uint32_t, wl_resource* surface_resource, int32_t, int32_t) {
+    if (surface_resource) {
+        auto* seat = static_cast<SeatManager*>(wl_resource_get_user_data(resource));
+        if (seat && seat->getBridge()) {
+            WaylandSurface* surf = seat->getBridge()->surfaceFromResource(surface_resource);
+            if (surf) {
+                surf->isCursor = true;
+                seat->getBridge()->destroyLayerForSurface(surf);
+            }
+        }
+    }
+}
 static void pointer_release(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
 static const struct wl_pointer_interface pointer_iface = {
     .set_cursor = pointer_set_cursor,
@@ -394,6 +405,18 @@ uint32_t SeatManager::getKeymapSize() const {
     return static_cast<uint32_t>(mImpl->keymapSize);
 }
 
+int32_t SeatManager::getLastTouchScreenX() const {
+    return mImpl ? mImpl->touchSlots[0].screenX : 0;
+}
+
+int32_t SeatManager::getLastTouchScreenY() const {
+    return mImpl ? mImpl->touchSlots[0].screenY : 0;
+}
+
+std::shared_ptr<SurfaceBridge> SeatManager::getBridge() const {
+    return mImpl ? mImpl->bridge : nullptr;
+}
+
 void SeatManager::notifySurfaceDestroyed(wl_resource* surfaceResource) {
     if (mImpl->currentKeyboardSurface == surfaceResource) mImpl->currentKeyboardSurface = nullptr;
     if (mImpl->currentPointerSurface == surfaceResource) mImpl->currentPointerSurface = nullptr;
@@ -509,10 +532,10 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                     TouchSlot& slot = mImpl->touchSlots[mImpl->currentSlot];
                     slot.screenY = scaleCoord(ev.value, dev->absY.minimum, dev->absY.maximum, dispH);
                     slot.modified = true;
-                } else if (ev.code == ABS_X) {
+                } else if (ev.code == ABS_X && !dev->isTouch) {
                     mImpl->pointerScreenX = scaleCoord(ev.value, dev->absX.minimum, dev->absX.maximum, dispW);
                     mImpl->pointerModified = true;
-                } else if (ev.code == ABS_Y) {
+                } else if (ev.code == ABS_Y && !dev->isTouch) {
                     mImpl->pointerScreenY = scaleCoord(ev.value, dev->absY.minimum, dev->absY.maximum, dispH);
                     mImpl->pointerModified = true;
                 }
@@ -541,6 +564,11 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                 } else if (ev.code == BTN_LEFT || ev.code == BTN_RIGHT || ev.code == BTN_MIDDLE) {
                     uint32_t btn = ev.code;
                     uint32_t state = ev.value ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED;
+                    if (btn == BTN_LEFT && state == WL_POINTER_BUTTON_STATE_RELEASED) {
+                        if (mImpl->bridge && mImpl->bridge->isMoveGrabActive()) {
+                            mImpl->bridge->endMoveGrab();
+                        }
+                    }
                     uint32_t serial = wl_display_next_serial(mImpl->display);
                     if (mImpl->currentPointerSurface) {
                         struct wl_client* targetClient = wl_resource_get_client(mImpl->currentPointerSurface);
@@ -584,21 +612,42 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                         slot.localX = localX;
                         slot.localY = localY;
 
+                        // Check if touched on the server-side titlebar
+                        if (surf && surf->hasDecor && localY < 0) {
+                            int32_t w = surf->committed.width;
+                            if (localX >= w - 44) {
+                                ALOGI("Titlebar: Close button hit for surface %u", surf->id);
+                                mImpl->bridge->closeSurface(surf);
+                            } else if (localX >= w - 88) {
+                                ALOGI("Titlebar: Maximize button hit for surface %u", surf->id);
+                                mImpl->bridge->toggleMaximize(surf);
+                            } else if (localX >= w - 132) {
+                                ALOGI("Titlebar: Minimize button hit for surface %u", surf->id);
+                                mImpl->bridge->minimizeSurface(surf);
+                            } else {
+                                ALOGI("Titlebar: Drag grab started for surface %u", surf->id);
+                                mImpl->bridge->startMoveGrab(surf, slot.screenX, slot.screenY);
+                            }
+                            continue;
+                        }
+
                         if (surf && surf->resource) {
                             setKeyboardFocus(surf->resource);
 
                             struct wl_client* targetClient = wl_resource_get_client(surf->resource);
 
+                            bool hasTouchResource = false;
                             for (wl_resource* touch : mImpl->touchResources) {
                                 if (wl_resource_get_client(touch) == targetClient) {
+                                    hasTouchResource = true;
                                     wl_touch_send_down(touch, serial, timeMs, surf->resource, s,
                                                        wl_fixed_from_int(localX), wl_fixed_from_int(localY));
                                     wl_touch_send_frame(touch);
                                 }
                             }
 
-                            // Pointer emulation for slot 0
-                            if (s == 0) {
+                            // Pointer emulation for slot 0 ONLY if client has NO touch interface
+                            if (s == 0 && !hasTouchResource) {
                                 for (wl_resource* ptr : mImpl->pointerResources) {
                                     if (wl_resource_get_client(ptr) == targetClient) {
                                         if (mImpl->currentPointerSurface != surf->resource) {
@@ -613,6 +662,9 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                                             mImpl->currentPointerSurface = surf->resource;
                                             wl_pointer_send_enter(ptr, serial, surf->resource,
                                                                   wl_fixed_from_int(localX), wl_fixed_from_int(localY));
+                                        } else {
+                                            wl_pointer_send_motion(ptr, timeMs,
+                                                                   wl_fixed_from_int(localX), wl_fixed_from_int(localY));
                                         }
                                         wl_pointer_send_button(ptr, serial, timeMs, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
                                         wl_pointer_send_frame(ptr);
@@ -627,6 +679,11 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                     }
                     // Case 2: Touch MOTION
                     else if (slot.trackingId >= 0 && slot.down) {
+                        if (mImpl->bridge && mImpl->bridge->isMoveGrabActive()) {
+                            mImpl->bridge->updateMoveGrab(slot.screenX, slot.screenY);
+                            continue;
+                        }
+
                         if (slot.targetSurface && slot.targetSurfaceResource) {
                             WaylandSurface* surf = slot.targetSurface;
                             int32_t localX = surf ? (slot.screenX - surf->committed.x) : slot.localX;
@@ -636,15 +693,17 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
 
                             struct wl_client* targetClient = wl_resource_get_client(slot.targetSurfaceResource);
 
+                            bool hasTouchResource = false;
                             for (wl_resource* touch : mImpl->touchResources) {
                                 if (wl_resource_get_client(touch) == targetClient) {
+                                    hasTouchResource = true;
                                     wl_touch_send_motion(touch, timeMs, s,
                                                          wl_fixed_from_int(localX), wl_fixed_from_int(localY));
                                     wl_touch_send_frame(touch);
                                 }
                             }
 
-                            if (s == 0) {
+                            if (s == 0 && !hasTouchResource) {
                                 for (wl_resource* ptr : mImpl->pointerResources) {
                                     if (wl_resource_get_client(ptr) == targetClient) {
                                         wl_pointer_send_motion(ptr, timeMs,
@@ -658,17 +717,23 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                     // Case 3: Touch UP
                     else if (slot.trackingId == -1 && slot.down) {
                         slot.down = false;
+                        if (mImpl->bridge && mImpl->bridge->isMoveGrabActive()) {
+                            mImpl->bridge->endMoveGrab();
+                        }
+
                         if (slot.targetSurfaceResource) {
                             struct wl_client* targetClient = wl_resource_get_client(slot.targetSurfaceResource);
 
+                            bool hasTouchResource = false;
                             for (wl_resource* touch : mImpl->touchResources) {
                                 if (wl_resource_get_client(touch) == targetClient) {
+                                    hasTouchResource = true;
                                     wl_touch_send_up(touch, serial, timeMs, s);
                                     wl_touch_send_frame(touch);
                                 }
                             }
 
-                            if (s == 0) {
+                            if (s == 0 && !hasTouchResource) {
                                 for (wl_resource* ptr : mImpl->pointerResources) {
                                     if (wl_resource_get_client(ptr) == targetClient) {
                                         wl_pointer_send_button(ptr, serial, timeMs, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
@@ -686,10 +751,13 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                 // Mouse/pointer motion
                 if (mImpl->pointerModified) {
                     mImpl->pointerModified = false;
-                    uint32_t serial = wl_display_next_serial(mImpl->display);
-                    int32_t localX = 0, localY = 0;
-                    WaylandSurface* surf = mImpl->bridge ? mImpl->bridge->surfaceAt(mImpl->pointerScreenX, mImpl->pointerScreenY, &localX, &localY) : nullptr;
-                    if (surf && surf->resource) {
+                    if (mImpl->bridge && mImpl->bridge->isMoveGrabActive()) {
+                        mImpl->bridge->updateMoveGrab(mImpl->pointerScreenX, mImpl->pointerScreenY);
+                    } else {
+                        uint32_t serial = wl_display_next_serial(mImpl->display);
+                        int32_t localX = 0, localY = 0;
+                        WaylandSurface* surf = mImpl->bridge ? mImpl->bridge->surfaceAt(mImpl->pointerScreenX, mImpl->pointerScreenY, &localX, &localY) : nullptr;
+                        if (surf && surf->resource) {
                         struct wl_client* targetClient = wl_resource_get_client(surf->resource);
                         for (wl_resource* ptr : mImpl->pointerResources) {
                             if (wl_resource_get_client(ptr) == targetClient) {
@@ -720,6 +788,7 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                             }
                             mImpl->currentPointerSurface = nullptr;
                         }
+                    }
                     }
                 }
             }

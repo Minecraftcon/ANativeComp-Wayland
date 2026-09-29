@@ -581,12 +581,22 @@ static void output_done(void* data, struct wl_output* output) { (void)data; (voi
 static void output_scale(void* data, struct wl_output* output, int32_t factor) {
     (void)data; (void)output; (void)factor;
 }
+static void output_name(void* data, struct wl_output* output, const char* name) {
+    (void)data; (void)output;
+    printf(">> [OUTPUT NAME] '%s'\n", name);
+}
+static void output_description(void* data, struct wl_output* output, const char* desc) {
+    (void)data; (void)output;
+    printf(">> [OUTPUT DESC] '%s'\n", desc);
+}
 
 static const struct wl_output_listener output_listener = {
-    .geometry = output_geometry,
-    .mode     = output_mode,
-    .done     = output_done,
-    .scale    = output_scale,
+    .geometry    = output_geometry,
+    .mode        = output_mode,
+    .done        = output_done,
+    .scale       = output_scale,
+    .name        = output_name,
+    .description = output_description,
 };
 
 // ── Registry listener ───────────────────────────────────────────────────────
@@ -727,12 +737,14 @@ int main(int argc, char* argv[]) {
     }
 
     printf("Cleaning up interactive window...\n");
-    if (g_touch)    wl_touch_destroy(g_touch);
-    if (g_pointer)  wl_pointer_destroy(g_pointer);
-    if (g_keyboard) wl_keyboard_destroy(g_keyboard);
-    if (g_seat)     wl_seat_destroy(g_seat);
+    if (g_touch)    wl_touch_release(g_touch);
+    if (g_pointer)  wl_pointer_release(g_pointer);
+    if (g_keyboard) wl_keyboard_release(g_keyboard);
+    if (g_seat)     wl_seat_release(g_seat);
+    if (g_output)   wl_output_release(g_output);
     if (g_surface)  wl_surface_destroy(g_surface);
     if (g_buffer)   wl_buffer_destroy(g_buffer);
+    if (registry)   wl_registry_destroy(registry);
     munmap(g_pixels, size);
     wl_display_disconnect(display);
     printf("Done.\n");

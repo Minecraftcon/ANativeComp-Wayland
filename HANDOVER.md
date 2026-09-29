@@ -219,11 +219,30 @@ Verified on device `RKNNWK5LSWRO8TIJ` (720×1600 @60Hz):
 
 - Compositor boots, connects to SurfaceFlinger, creates the socket.
 - `wl_compositor` (v5), `wl_shm`, `xdg_wm_base` (v5), `wl_seat` (v7), `wl_output` (v4).
+- `wl_subcompositor` (v1) & `wl_subsurface` (v1) implemented for popup and toolbars.
+- `wl_data_device_manager` (v3), `wl_data_device`, and `wl_data_source` registered for clipboard support.
+- `wp_viewporter` (v1) & `wp_viewport` registered for scaling/cropping.
+- `wl_region` (v1) implemented with real resources for input/opaque regions.
+- `xdg_positioner` (v5) implemented with real resources for menu anchors/popups.
+- `xdg_popup` interface implemented (`destroy`, `grab`, `reposition`, `send_configure`).
+- `xdg_toplevel` state handling implemented (`set_fullscreen`, `set_maximized`, `set_title`, `set_app_id`).
+- Version inheritance: `wl_surface`, `xdg_surface`, `xdg_toplevel`, `xdg_popup` inherit client's negotiated version.
 - 5 evdev devices enlisted; `/dev/input/event2` correctly detected as touchscreen.
 - Full XKB keymap (60911 bytes) via `memfd`, repeat_info 33Hz/500ms.
 - Touch → `wl_touch` **and** `wl_pointer` emulation (slot 0), keyboard → `wl_keyboard`.
 - Hit-testing with correct local-coordinate translation.
-- Fullscreen surface (720×1600) and windowed (560×400, centred).
+- Fullscreen surface (720×1600) and windowed (e.g. 576×663 / 580×700 floating window, centred).
+- **Real Linux Terminal Execution Verified:** Native `foot` terminal (aarch64) running under Termux user `u0_a296` verified in both fullscreen (`foot -F`) and windowed (`foot -w 580x700`) modes!
+  - Screenshots: `foot_fs_now.png` (fullscreen) and `foot_windowed_success.png` (floating window with titlebar, borders, cursor, and interactive shell).
+- **BLASTBufferQueue Dynamic Resize Bug Fixed:**
+  - *Root Cause:* In Android 12, `SurfaceControl` uses `BLASTBufferQueue`. When a surface was created on initial commit without a buffer (e.g. during xdg-shell configure negotiation), it was given a default 720×1600 layer. When the client later attached its actual window buffer (576×663), `BLASTBufferQueue` rejected the incoming buffer with: `rejecting buffer: active_size=720x1600, requested_size=720x1600 buffer{size=576x663}`.
+  - *Fix:*
+    1. Deferred `SurfaceControl` layer creation in `SurfaceBridge::commitSurface` until a buffer is actually attached, ensuring the layer and its `BLASTBufferQueue` are instantiated with true client geometry from birth.
+    2. Implemented `layer->surfaceControl->updateDefaultBufferSize(width, height)` in `SurfaceFlingerBridge::resizeLayer` and `Transaction::apply` so any runtime resize updates `BLASTBufferQueue`'s internal dimensions.
+- Dynamic layer resizing: `SurfaceFlingerBridge::resizeLayer()` updates `SurfaceControl` transaction size, crop, `ANativeWindow` buffer geometry, and `BLASTBufferQueue` default buffer size on client resize.
+- Fixed `Transaction::setPosition()` bug where moving to `(0, 0)` was ignored.
+- XRGB8888 alpha fix: forces `0xFF000000` during `mergeDamage()` so clients with zeroed unused byte render visibly.
+- Multi-user socket access: `/data/local/tmp/wayland/wayland-0` permissions set to `0777`, verified working with non-root Termux UID `u0_a296` under SELinux Enforcing.
 - Damage-tracked partial blits, no flicker/clipping.
 - Clean teardown — no orphaned layers.
 

@@ -16,6 +16,7 @@
 // Protocol generated headers (from wayland-scanner)
 #include "xdg-shell-protocol.h"
 #include "viewporter-protocol.h"
+#include "xdg-decoration-protocol.h"
 #ifdef ENABLE_DMABUF
 #  include "linux-dmabuf-protocol.h"
 #endif
@@ -91,7 +92,8 @@ static void compositor_bind(wl_client* client, void* data, uint32_t version, uin
 
 static void compositor_create_surface(wl_client* client, wl_resource* resource, uint32_t id) {
     auto* bridge = static_cast<SurfaceBridge*>(wl_resource_get_user_data(resource));
-    bridge->createSurface(client, id);
+    int version = wl_resource_get_version(resource);
+    bridge->createSurface(client, id, version);
 }
 
 static void compositor_create_region(wl_client* client, wl_resource* /*resource*/, uint32_t id) {
@@ -207,7 +209,8 @@ static void xdg_wm_base_bind(wl_client* client, void* data, uint32_t version, ui
 static void xdg_wm_base_get_xdg_surface(wl_client* client, wl_resource* resource,
                                           uint32_t id, wl_resource* surface_resource) {
     auto* bridge = static_cast<SurfaceBridge*>(wl_resource_get_user_data(resource));
-    bridge->getXdgSurface(client, id, surface_resource);
+    int version = wl_resource_get_version(resource);
+    bridge->getXdgSurface(client, id, surface_resource, version);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -216,7 +219,13 @@ static void xdg_wm_base_get_xdg_surface(wl_client* client, wl_resource* resource
 static void subsurface_destroy(wl_client*, wl_resource* resource) {
     wl_resource_destroy(resource);
 }
-static void subsurface_set_position(wl_client*, wl_resource*, int32_t, int32_t) {}
+static void subsurface_set_position(wl_client*, wl_resource* resource, int32_t x, int32_t y) {
+    auto* childSurface = static_cast<WaylandSurface*>(wl_resource_get_user_data(resource));
+    if (childSurface) {
+        childSurface->subX = x;
+        childSurface->subY = y;
+    }
+}
 static void subsurface_place_above(wl_client*, wl_resource*, wl_resource*) {}
 static void subsurface_place_below(wl_client*, wl_resource*, wl_resource*) {}
 static void subsurface_set_sync(wl_client*, wl_resource*) {}
@@ -234,14 +243,25 @@ static const struct wl_subsurface_interface subsurface_interface_impl = {
 static void subcompositor_destroy(wl_client*, wl_resource* resource) {
     wl_resource_destroy(resource);
 }
-static void subcompositor_get_subsurface(wl_client* client, wl_resource*,
-                                        uint32_t id, wl_resource* surface, wl_resource*) {
+static void subcompositor_get_subsurface(wl_client* client, wl_resource* resource,
+                                        uint32_t id, wl_resource* surface_res, wl_resource* parent_res) {
+    auto* bridge = static_cast<SurfaceBridge*>(wl_resource_get_user_data(resource));
+    WaylandSurface* child = bridge ? bridge->surfaceFromResource(surface_res) : nullptr;
+    WaylandSurface* parent = bridge ? bridge->surfaceFromResource(parent_res) : nullptr;
+
     wl_resource* subRes = wl_resource_create(client, &wl_subsurface_interface, 1, id);
     if (!subRes) {
         wl_client_post_no_memory(client);
         return;
     }
-    wl_resource_set_implementation(subRes, &subsurface_interface_impl, surface, nullptr);
+
+    if (child && parent) {
+        child->parentSurface = parent;
+        child->isSubsurface  = true;
+        parent->subsurfaces.push_back(child);
+    }
+
+    wl_resource_set_implementation(subRes, &subsurface_interface_impl, child, nullptr);
 }
 
 static const struct wl_subcompositor_interface subcompositor_interface_impl = {
@@ -249,14 +269,14 @@ static const struct wl_subcompositor_interface subcompositor_interface_impl = {
     .get_subsurface = subcompositor_get_subsurface,
 };
 
-static void subcompositor_bind(wl_client* client, void*, uint32_t version, uint32_t id) {
+static void subcompositor_bind(wl_client* client, void* data, uint32_t version, uint32_t id) {
     wl_resource* resource = wl_resource_create(client, &wl_subcompositor_interface,
                                                static_cast<int>(version), id);
     if (!resource) {
         wl_client_post_no_memory(client);
         return;
     }
-    wl_resource_set_implementation(resource, &subcompositor_interface_impl, nullptr, nullptr);
+    wl_resource_set_implementation(resource, &subcompositor_interface_impl, data, nullptr);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -374,7 +394,9 @@ bool WaylandServer::init(const std::string& socketName,
         return false;
     }
     mSocketName = socketName;
-    ALOGI("Listening on %s/%s", runtimeDir, socketName.c_str());
+    std::string socketPath = std::string(runtimeDir) + "/" + socketName;
+    chmod(socketPath.c_str(), 0777);
+    ALOGI("Listening on %s", socketPath.c_str());
 
     // ── Register protocol globals ────────────────────────────────────────────
     registerCompositorGlobal();
@@ -385,6 +407,7 @@ bool WaylandServer::init(const std::string& socketName,
     registerSubcompositorGlobal();
     registerDataDeviceManagerGlobal();
     registerViewporterGlobal();
+    registerXdgDecorationGlobal();
 #ifdef ENABLE_DMABUF
     registerLinuxDmaBufGlobal();
 #endif
@@ -449,7 +472,7 @@ void WaylandServer::registerOutputGlobal() {
 
 void WaylandServer::registerSubcompositorGlobal() {
     wl_global_create(mDisplay, &wl_subcompositor_interface,
-                     1, nullptr, subcompositor_bind);
+                     1, mBridge.get(), subcompositor_bind);
 }
 
 void WaylandServer::registerDataDeviceManagerGlobal() {
@@ -457,9 +480,57 @@ void WaylandServer::registerDataDeviceManagerGlobal() {
                      3, nullptr, data_device_manager_bind);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// wp_viewporter implementation
+// ─────────────────────────────────────────────────────────────────────────────
+static void viewport_destroy(wl_client*, wl_resource* resource) {
+    wl_resource_destroy(resource);
+}
+static void viewport_set_source(wl_client*, wl_resource*, wl_fixed_t, wl_fixed_t, wl_fixed_t, wl_fixed_t) {}
+static void viewport_set_destination(wl_client*, wl_resource*, int32_t, int32_t) {}
+
+static const struct wp_viewport_interface viewport_interface_impl = {
+    .destroy         = viewport_destroy,
+    .set_source      = viewport_set_source,
+    .set_destination = viewport_set_destination,
+};
+
+static void viewporter_destroy(wl_client*, wl_resource* resource) {
+    wl_resource_destroy(resource);
+}
+static void viewporter_get_viewport(wl_client* client, wl_resource*, uint32_t id, wl_resource* surface) {
+    wl_resource* vp = wl_resource_create(client, &wp_viewport_interface, 1, id);
+    if (!vp) { wl_client_post_no_memory(client); return; }
+    wl_resource_set_implementation(vp, &viewport_interface_impl, surface, nullptr);
+}
+
+static const struct wp_viewporter_interface viewporter_interface_impl = {
+    .destroy      = viewporter_destroy,
+    .get_viewport = viewporter_get_viewport,
+};
+
+static void viewporter_bind(wl_client* client, void*, uint32_t version, uint32_t id) {
+    wl_resource* resource = wl_resource_create(client, &wp_viewporter_interface,
+                                               static_cast<int>(version), id);
+    if (!resource) { wl_client_post_no_memory(client); return; }
+    wl_resource_set_implementation(resource, &viewporter_interface_impl, nullptr, nullptr);
+}
+
 void WaylandServer::registerViewporterGlobal() {
-    // wp_viewporter — implemented in protocols/viewporter/Viewporter.cpp
-    // Registered separately by ViewporterProtocol::registerGlobal(mDisplay)
+    wl_global_create(mDisplay, &wp_viewporter_interface,
+                     1, nullptr, viewporter_bind);
+}
+
+static void xdg_decoration_bind(wl_client* client, void* data, uint32_t version, uint32_t id) {
+    auto* bridge = static_cast<SurfaceBridge*>(data);
+    if (bridge) {
+        bridge->bindXdgDecoration(client, version, id);
+    }
+}
+
+void WaylandServer::registerXdgDecorationGlobal() {
+    wl_global_create(mDisplay, &zxdg_decoration_manager_v1_interface,
+                     1, mBridge.get(), xdg_decoration_bind);
 }
 
 #ifdef ENABLE_DMABUF

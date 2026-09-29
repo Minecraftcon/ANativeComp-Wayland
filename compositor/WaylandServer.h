@@ -80,6 +80,7 @@ private:
     void registerSubcompositorGlobal();
     void registerDataDeviceManagerGlobal();
     void registerViewporterGlobal();
+    void registerXdgDecorationGlobal();
 #ifdef ENABLE_DMABUF
     void registerLinuxDmaBufGlobal();
 #endif

@@ -146,16 +146,17 @@ DisplayInfo SurfaceFlingerBridge::getDisplayInfo() const {
         android::SurfaceComposerClient::getPhysicalDisplayToken(mImpl->primaryDisplayId);
 
     android::ui::DisplayState state;
+    int32_t layerStackW = 0, layerStackH = 0;
     if (android::SurfaceComposerClient::getDisplayState(token, &state) == android::NO_ERROR) {
-        info.width       = state.layerStackSpaceRect.getWidth();
-        info.height      = state.layerStackSpaceRect.getHeight();
+        layerStackW      = state.layerStackSpaceRect.getWidth();
+        layerStackH      = state.layerStackSpaceRect.getHeight();
         info.orientation = static_cast<int32_t>(state.orientation);
     }
 
     android::ui::DisplayMode activeMode;
     if (android::SurfaceComposerClient::getActiveDisplayMode(token, &activeMode) == android::NO_ERROR) {
-        info.width       = activeMode.resolution.width;
-        info.height      = activeMode.resolution.height;
+        info.width       = (layerStackW > 0) ? layerStackW : activeMode.resolution.width;
+        info.height      = (layerStackH > 0) ? layerStackH : activeMode.resolution.height;
         info.xdpi        = activeMode.xDpi;
         info.ydpi        = activeMode.yDpi;
         info.refreshRate = activeMode.refreshRate;
@@ -193,9 +194,10 @@ SFLayerHandle SurfaceFlingerBridge::createLayer(const std::string& name,
         return nullptr;
     }
 
-    // Apply initial Z-order and make visible
+    // Apply initial Z-order and make visible with full crop
     android::SurfaceComposerClient::Transaction{}
         .setLayer(sc, zOrder)
+        .setCrop(sc, android::Rect(0, 0, width, height))
         .show(sc)
         .apply();
 
@@ -220,13 +222,15 @@ void SurfaceFlingerBridge::destroyLayer(SFLayerHandle& layer) {
 
 bool SurfaceFlingerBridge::resizeLayer(SFLayerHandle layer, int32_t width, int32_t height) {
     if (!layer || !layer->surfaceControl) return false;
+    layer->surfaceControl->updateDefaultBufferSize(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
     android::SurfaceComposerClient::Transaction{}
         .setSize(layer->surfaceControl, static_cast<uint32_t>(width), static_cast<uint32_t>(height))
+        .setCrop(layer->surfaceControl, android::Rect(0, 0, width, height))
         .apply();
     if (layer->surface) {
         layer->surface->setBuffersDimensions(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
     }
-    ALOGI("Layer resized to %dx%d", width, height);
+    ALOGI("Layer resized to %dx%d (crop and BBQ updated)", width, height);
     return true;
 }
 
@@ -320,7 +324,10 @@ void SurfaceFlingerBridge::Transaction::apply() {
         if (ch.hasPosition)
             sfTx.setPosition(sc, static_cast<float>(p.x), static_cast<float>(p.y));
         if (ch.hasSize && p.width > 0 && p.height > 0) {
+            ch.layer->surfaceControl->updateDefaultBufferSize(static_cast<uint32_t>(p.width),
+                                                              static_cast<uint32_t>(p.height));
             sfTx.setSize(sc, static_cast<uint32_t>(p.width), static_cast<uint32_t>(p.height));
+            sfTx.setCrop(sc, android::Rect(0, 0, p.width, p.height));
             if (ch.layer->surface) {
                 ch.layer->surface->setBuffersDimensions(static_cast<uint32_t>(p.width),
                                                         static_cast<uint32_t>(p.height));

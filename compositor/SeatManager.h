@@ -65,6 +65,12 @@ public:
     int getKeymapFd() const;
     uint32_t getKeymapSize() const;
 
+    /** Accessors for last touch coordinates */
+    int32_t getLastTouchScreenX() const;
+    int32_t getLastTouchScreenY() const;
+
+    std::shared_ptr<SurfaceBridge> getBridge() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> mImpl;
