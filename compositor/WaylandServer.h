@@ -81,6 +81,7 @@ private:
     void registerDataDeviceManagerGlobal();
     void registerViewporterGlobal();
     void registerXdgDecorationGlobal();
+    void registerXwaylandShellGlobal();
 #ifdef ENABLE_DMABUF
     void registerLinuxDmaBufGlobal();
 #endif

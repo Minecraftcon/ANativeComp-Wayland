@@ -26,6 +26,7 @@
 // xdg-shell generated bindings
 #include "xdg-shell-protocol.h"
 #include "xdg-decoration-protocol.h"
+#include "xwayland-shell-protocol.h"
 #include "SimpleFont.h"
 
 #include <android/log.h>
@@ -628,6 +629,98 @@ void SurfaceBridge::bindXdgDecoration(wl_client* client, uint32_t version, uint3
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// xwayland_shell_v1 implementation
+// ─────────────────────────────────────────────────────────────────────────────
+static void xwayland_surface_set_serial(wl_client*, wl_resource* resource,
+                                        uint32_t serial_lo, uint32_t serial_hi) {
+    auto* surface = static_cast<WaylandSurface*>(wl_resource_get_user_data(resource));
+    if (!surface) return;
+    if (serial_lo == 0 && serial_hi == 0) {
+        wl_resource_post_error(resource, XWAYLAND_SURFACE_V1_ERROR_INVALID_SERIAL, "Serial cannot be 0");
+        return;
+    }
+    surface->xwaylandSerial = (static_cast<uint64_t>(serial_hi) << 32) | serial_lo;
+    ALOGI("xwayland_surface_v1: set_serial for surface %u (serial=0x%llx)",
+          surface->id, static_cast<unsigned long long>(surface->xwaylandSerial));
+}
+
+static void xwayland_surface_destroy(wl_client*, wl_resource* resource) {
+    wl_resource_destroy(resource);
+}
+
+static const struct xwayland_surface_v1_interface xwayland_surface_impl = {
+    .set_serial = xwayland_surface_set_serial,
+    .destroy    = xwayland_surface_destroy,
+};
+
+static void xwayland_shell_destroy(wl_client*, wl_resource* resource) {
+    wl_resource_destroy(resource);
+}
+
+static void xwayland_shell_get_xwayland_surface(wl_client* client, wl_resource* resource,
+                                                uint32_t id, wl_resource* surfaceResource) {
+    auto* bridge = static_cast<SurfaceBridge*>(wl_resource_get_user_data(resource));
+    if (bridge) {
+        int version = wl_resource_get_version(resource);
+        bridge->getXwaylandSurface(client, id, surfaceResource, version);
+    }
+}
+
+static const struct xwayland_shell_v1_interface xwayland_shell_impl = {
+    .destroy              = xwayland_shell_destroy,
+    .get_xwayland_surface = xwayland_shell_get_xwayland_surface,
+};
+
+void SurfaceBridge::bindXwaylandShell(wl_client* client, uint32_t version, uint32_t id) {
+    ALOGI("bindXwaylandShell: client=%p, version=%u, id=%u", client, version, id);
+    wl_resource* resource = wl_resource_create(client, &xwayland_shell_v1_interface,
+                                               static_cast<int>(version), id);
+    if (!resource) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(resource, &xwayland_shell_impl, this, nullptr);
+}
+
+void SurfaceBridge::getXwaylandSurface(wl_client* client, uint32_t id,
+                                      wl_resource* surfaceResource, int version) {
+    WaylandSurface* surface = surfaceFromResource(surfaceResource);
+    if (!surface) {
+        wl_resource_post_error(surfaceResource, WL_DISPLAY_ERROR_INVALID_OBJECT, "Surface not found");
+        return;
+    }
+    if (surface->xdgSurface || surface->xdgToplevel || surface->xdgPopup ||
+        surface->isSubsurface || surface->isCursor || surface->isXwayland) {
+        wl_resource_post_error(surfaceResource, XWAYLAND_SHELL_V1_ERROR_ROLE,
+                               "wl_surface already has an assigned role");
+        return;
+    }
+
+    wl_resource* res = wl_resource_create(client, &xwayland_surface_v1_interface, version, id);
+    if (!res) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+
+    surface->isXwayland = true;
+    surface->xwaylandSurface = res;
+    surface->hasDecor = true;
+    if (surface->title.empty()) {
+        surface->title = "X11 Application";
+    }
+    surface->appId = "xwayland";
+
+    ALOGI("getXwaylandSurface: assigned xwayland role to surface %u", surface->id);
+
+    wl_resource_set_implementation(res, &xwayland_surface_impl, surface, [](wl_resource* r) {
+        auto* s = static_cast<WaylandSurface*>(wl_resource_get_user_data(r));
+        if (s) {
+            s->xwaylandSurface = nullptr;
+        }
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // wl_output
 // ─────────────────────────────────────────────────────────────────────────────
 static const struct wl_output_interface output_interface = {
@@ -738,9 +831,9 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
     // ── 1. Lazy-create the SurfaceFlinger layer ───────────────────────────────
     if (!surface->sfLayer) {
         // Only create a SurfaceFlinger layer if this surface has a valid window role:
-        // xdgToplevel, xdgPopup, or subsurface!
+        // xdgToplevel, xdgPopup, subsurface, or isXwayland!
         // Do NOT create window layers for cursor surfaces or unassigned surfaces!
-        if (surface->isCursor || (!surface->xdgToplevel && !surface->xdgPopup && !surface->isSubsurface)) {
+        if (surface->isCursor || (!surface->xdgToplevel && !surface->xdgPopup && !surface->isSubsurface && !surface->isXwayland)) {
             return;
         }
 
@@ -763,7 +856,7 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
                 }
             }
 
-            std::string name = "wl_surface#" + std::to_string(surface->id);
+            std::string name = (surface->isXwayland ? "xwayland#" : "wl_surface#") + std::to_string(surface->id);
             int32_t z = surface->zOrder;
             if (surface->isSubsurface && surface->parentSurface) {
                 z = surface->parentSurface->zOrder + 20;
@@ -812,7 +905,7 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
             surface->committed.height = layerH;
             surface->committed.mapped = true;
 
-            if (surface->xdgToplevel) {
+            if (surface->xdgToplevel || surface->isXwayland) {
                 activateSurface(surface);
             }
 
@@ -910,7 +1003,7 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
     surface->frameCallbacks.clear();
 
     // ── 4. Update decor if toplevel windowed ─────────────────────────────────
-    if (surface->hasDecor && surface->xdgToplevel && !surface->isFullscreen && surface->committed.mapped) {
+    if (surface->hasDecor && (surface->xdgToplevel || surface->isXwayland) && !surface->isFullscreen && surface->committed.mapped) {
         if (!surface->decorLayer || surface->committed.width != static_cast<int32_t>(surface->decorBuffer.size() / (surface->decorHeight ? surface->decorHeight : 1))) {
             updateDecor(surface);
         }
@@ -1142,7 +1235,7 @@ void SurfaceBridge::destroySurface(WaylandSurface* surface) {
         WaylandSurface* nextTop = nullptr;
         int32_t topZ = -1;
         for (const auto& [r, s] : mSurfaces) {
-            if (s && s->committed.mapped && s->xdgToplevel && !s->isCursor) {
+            if (s && s->committed.mapped && (s->xdgToplevel || s->isXwayland) && !s->isCursor) {
                 if (s->zOrder > topZ) {
                     topZ = s->zOrder;
                     nextTop = s.get();
@@ -1158,9 +1251,15 @@ void SurfaceBridge::destroySurface(WaylandSurface* surface) {
 }
 
 void SurfaceBridge::destroyLayerForSurface(WaylandSurface* surface) {
-    if (surface && surface->sfLayer) {
-        mSfBridge.destroyLayer(surface->sfLayer);
-        surface->sfLayer = nullptr;
+    if (surface) {
+        if (surface->decorLayer) {
+            mSfBridge.destroyLayer(surface->decorLayer);
+            surface->decorLayer = nullptr;
+        }
+        if (surface->sfLayer) {
+            mSfBridge.destroyLayer(surface->sfLayer);
+            surface->sfLayer = nullptr;
+        }
     }
 }
 
@@ -1171,7 +1270,7 @@ WaylandSurface* SurfaceBridge::surfaceAt(int32_t screenX, int32_t screenY,
 
     for (const auto& [res, surf] : mSurfaces) {
         if (!surf || !surf->committed.mapped || !surf->sfLayer || surf->isCursor) continue;
-        if (!surf->xdgToplevel && !surf->xdgPopup && !surf->isSubsurface) continue;
+        if (!surf->xdgToplevel && !surf->xdgPopup && !surf->isSubsurface && !surf->isXwayland) continue;
         int32_t sx = surf->committed.x;
         int32_t sy = surf->committed.y;
         int32_t sw = surf->committed.width;
@@ -1354,9 +1453,13 @@ void SurfaceBridge::endMoveGrab() {
 }
 
 void SurfaceBridge::closeSurface(WaylandSurface* surface) {
-    if (surface && surface->xdgToplevel) {
+    if (!surface) return;
+    if (surface->xdgToplevel) {
         xdg_toplevel_send_close(surface->xdgToplevel);
         ALOGI("closeSurface: sent close to surface %u", surface->id);
+    } else if (surface->isXwayland) {
+        destroyLayerForSurface(surface);
+        ALOGI("closeSurface: closed Xwayland surface %u", surface->id);
     }
 }
 
@@ -1373,28 +1476,38 @@ void SurfaceBridge::minimizeSurface(WaylandSurface* surface) {
 }
 
 void SurfaceBridge::toggleMaximize(WaylandSurface* surface) {
-    if (!surface || !surface->xdgToplevel) return;
-    activateSurface(surface);
-    surface->isFullscreen = !surface->isFullscreen;
-    struct wl_array states;
-    wl_array_init(&states);
-    uint32_t* a = static_cast<uint32_t*>(wl_array_add(&states, sizeof(uint32_t)));
-    *a = XDG_TOPLEVEL_STATE_ACTIVATED;
-    if (surface->isFullscreen) {
-        uint32_t* m = static_cast<uint32_t*>(wl_array_add(&states, sizeof(uint32_t)));
-        *m = XDG_TOPLEVEL_STATE_MAXIMIZED;
+    if (!surface) return;
+    if (surface->xdgToplevel) {
+        activateSurface(surface);
+        surface->isFullscreen = !surface->isFullscreen;
+        struct wl_array states;
+        wl_array_init(&states);
+        uint32_t* a = static_cast<uint32_t*>(wl_array_add(&states, sizeof(uint32_t)));
+        *a = XDG_TOPLEVEL_STATE_ACTIVATED;
+        if (surface->isFullscreen) {
+            uint32_t* m = static_cast<uint32_t*>(wl_array_add(&states, sizeof(uint32_t)));
+            *m = XDG_TOPLEVEL_STATE_MAXIMIZED;
+            int32_t decorH = surface->hasDecor ? surface->decorHeight : 0;
+            xdg_toplevel_send_configure(surface->xdgToplevel, mDisplayWidth, mDisplayHeight - decorH, &states);
+            moveSurface(surface, 0, decorH);
+        } else {
+            xdg_toplevel_send_configure(surface->xdgToplevel, 0, 0, &states);
+        }
+        wl_array_release(&states);
+        if (surface->xdgSurface) {
+            xdg_surface_send_configure(surface->xdgSurface, wl_display_next_serial(
+                wl_client_get_display(wl_resource_get_client(surface->resource))));
+        }
+        ALOGI("toggleMaximize: surface %u fullscreen=%d", surface->id, surface->isFullscreen);
+    } else if (surface->isXwayland) {
+        activateSurface(surface);
+        surface->isFullscreen = !surface->isFullscreen;
         int32_t decorH = surface->hasDecor ? surface->decorHeight : 0;
-        xdg_toplevel_send_configure(surface->xdgToplevel, mDisplayWidth, mDisplayHeight - decorH, &states);
-        moveSurface(surface, 0, decorH);
-    } else {
-        xdg_toplevel_send_configure(surface->xdgToplevel, 0, 0, &states);
+        if (surface->isFullscreen) {
+            moveSurface(surface, 0, decorH);
+        }
+        ALOGI("toggleMaximize: Xwayland surface %u fullscreen=%d", surface->id, surface->isFullscreen);
     }
-    wl_array_release(&states);
-    if (surface->xdgSurface) {
-        xdg_surface_send_configure(surface->xdgSurface, wl_display_next_serial(
-            wl_client_get_display(wl_resource_get_client(surface->resource))));
-    }
-    ALOGI("toggleMaximize: surface %u fullscreen=%d", surface->id, surface->isFullscreen);
 }
 
 int32_t SurfaceBridge::allocateZOrder() {

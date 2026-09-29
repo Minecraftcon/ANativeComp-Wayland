@@ -17,6 +17,7 @@
 #include "xdg-shell-protocol.h"
 #include "viewporter-protocol.h"
 #include "xdg-decoration-protocol.h"
+#include "xwayland-shell-protocol.h"
 #ifdef ENABLE_DMABUF
 #  include "linux-dmabuf-protocol.h"
 #endif
@@ -394,6 +395,7 @@ bool WaylandServer::init(const std::string& socketName,
     registerDataDeviceManagerGlobal();
     registerViewporterGlobal();
     registerXdgDecorationGlobal();
+    registerXwaylandShellGlobal();
 #ifdef ENABLE_DMABUF
     registerLinuxDmaBufGlobal();
 #endif
@@ -517,6 +519,18 @@ static void xdg_decoration_bind(wl_client* client, void* data, uint32_t version,
 void WaylandServer::registerXdgDecorationGlobal() {
     wl_global_create(mDisplay, &zxdg_decoration_manager_v1_interface,
                      1, mBridge.get(), xdg_decoration_bind);
+}
+
+static void xwayland_shell_bind(wl_client* client, void* data, uint32_t version, uint32_t id) {
+    auto* bridge = static_cast<SurfaceBridge*>(data);
+    if (bridge) {
+        bridge->bindXwaylandShell(client, version, id);
+    }
+}
+
+void WaylandServer::registerXwaylandShellGlobal() {
+    wl_global_create(mDisplay, &xwayland_shell_v1_interface,
+                     1, mBridge.get(), xwayland_shell_bind);
 }
 
 #ifdef ENABLE_DMABUF

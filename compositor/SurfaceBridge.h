@@ -97,6 +97,11 @@ struct WaylandSurface {
     std::string   appId;
     bool          isFullscreen = false;
 
+    // Xwayland shell state
+    bool          isXwayland      = false;
+    uint64_t      xwaylandSerial  = 0;
+    wl_resource*  xwaylandSurface = nullptr;
+
     // Subsurface relationship
     WaylandSurface*              parentSurface = nullptr;
     std::vector<WaylandSurface*> subsurfaces;
@@ -193,6 +198,10 @@ public:
     void bindXdgDecoration(wl_client* client, uint32_t version, uint32_t id);
     void getToplevelDecoration(wl_client* client, uint32_t id, wl_resource* toplevel);
     void updateDecor(WaylandSurface* surface);
+
+    // ── Xwayland Shell (Rootless X11 Window Integration) ─────────────────────
+    void bindXwaylandShell(wl_client* client, uint32_t version, uint32_t id);
+    void getXwaylandSurface(wl_client* client, uint32_t id, wl_resource* surfaceResource, int version = 1);
 
     // ── Window Controls ───────────────────────────────────────────────────────
     void toggleMaximize(WaylandSurface* surface);

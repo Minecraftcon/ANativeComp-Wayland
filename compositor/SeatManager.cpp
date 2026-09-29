@@ -582,6 +582,7 @@ void SeatManager::setPointerFocus(wl_resource* surfaceResource) {
 // ─────────────────────────────────────────────────────────────────────────────
 static bool isNonTouchApp(const WaylandSurface* surf) {
     if (!surf) return false;
+    if (surf->isXwayland) return true;
     std::string id = surf->appId;
     std::transform(id.begin(), id.end(), id.begin(), ::tolower);
     if (id.find("foot") != std::string::npos ||
