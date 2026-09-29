@@ -244,7 +244,114 @@ static void xdg_popup_destroy(wl_client*, wl_resource* resource) {
     wl_resource_destroy(resource);
 }
 static void xdg_popup_grab(wl_client*, wl_resource*, wl_resource*, uint32_t) {}
-static void xdg_popup_reposition(wl_client*, wl_resource*, wl_resource*, uint32_t) {}
+
+static void calculatePopupLayout(const PositionerData* pos, int32_t& posX, int32_t& posY, int32_t& confW, int32_t& confH) {
+    if (!pos) {
+        posX = 0; posY = 0; confW = 0; confH = 0;
+        return;
+    }
+
+    int32_t anchorPtX = pos->anchorX;
+    int32_t anchorPtY = pos->anchorY;
+
+    // 1. Anchor rectangle point
+    switch (pos->anchor) {
+        case 1: // TOP
+            anchorPtX += pos->anchorW / 2;
+            break;
+        case 2: // BOTTOM
+            anchorPtX += pos->anchorW / 2;
+            anchorPtY += pos->anchorH;
+            break;
+        case 3: // LEFT
+            anchorPtY += pos->anchorH / 2;
+            break;
+        case 4: // RIGHT
+            anchorPtX += pos->anchorW;
+            anchorPtY += pos->anchorH / 2;
+            break;
+        case 5: // TOP_LEFT
+            break;
+        case 6: // BOTTOM_LEFT
+            anchorPtY += pos->anchorH;
+            break;
+        case 7: // TOP_RIGHT
+            anchorPtX += pos->anchorW;
+            break;
+        case 8: // BOTTOM_RIGHT
+            anchorPtX += pos->anchorW;
+            anchorPtY += pos->anchorH;
+            break;
+        default: // NONE / default: attach below anchor
+            anchorPtY += pos->anchorH;
+            break;
+    }
+
+    int32_t popW = pos->width > 0 ? pos->width : 200;
+    int32_t popH = pos->height > 0 ? pos->height : 200;
+
+    int32_t x = anchorPtX;
+    int32_t y = anchorPtY;
+
+    // 2. Gravity
+    switch (pos->gravity) {
+        case 1: // TOP
+            x -= popW / 2;
+            y -= popH;
+            break;
+        case 2: // BOTTOM
+            x -= popW / 2;
+            break;
+        case 3: // LEFT
+            x -= popW;
+            y -= popH / 2;
+            break;
+        case 4: // RIGHT
+            y -= popH / 2;
+            break;
+        case 5: // TOP_LEFT
+            x -= popW;
+            y -= popH;
+            break;
+        case 6: // BOTTOM_LEFT
+            x -= popW;
+            break;
+        case 7: // TOP_RIGHT
+            y -= popH;
+            break;
+        case 8: // BOTTOM_RIGHT
+        default:
+            // Top-left of popup is at anchor point
+            break;
+    }
+
+    x += pos->offsetX;
+    y += pos->offsetY;
+
+    posX = x;
+    posY = y;
+    confW = pos->width;
+    confH = pos->height;
+}
+
+static void xdg_popup_reposition(wl_client* client, wl_resource* resource, wl_resource* positionerRes, uint32_t token) {
+    auto* data = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(resource));
+    if (!data || !data->surface) return;
+
+    if (positionerRes) {
+        auto* pos = static_cast<PositionerData*>(wl_resource_get_user_data(positionerRes));
+        int32_t posX = 0, posY = 0, confW = 0, confH = 0;
+        calculatePopupLayout(pos, posX, posY, confW, confH);
+        data->surface->popupX = posX;
+        data->surface->popupY = posY;
+        data->surface->popupW = confW;
+        data->surface->popupH = confH;
+
+        xdg_popup_send_repositioned(resource, token);
+        xdg_popup_send_configure(resource, posX, posY, std::max(0, confW), std::max(0, confH));
+        xdg_surface_send_configure(data->surface->xdgSurface, wl_display_next_serial(wl_client_get_display(client)));
+    }
+}
 
 static const struct xdg_popup_interface xdg_popup_interface_impl = {
     .destroy    = xdg_popup_destroy,
@@ -253,9 +360,9 @@ static const struct xdg_popup_interface xdg_popup_interface_impl = {
 };
 
 static void xdg_surface_get_popup(wl_client* client, wl_resource* xdgSurfaceRes, uint32_t id,
-                                   wl_resource* /*parentRes*/, wl_resource* /*positionerRes*/) {
+                                   wl_resource* parentRes, wl_resource* positionerRes) {
     auto* data = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(xdgSurfaceRes));
-    if (!data) return;
+    if (!data || !data->surface) return;
 
     int version = wl_resource_get_version(xdgSurfaceRes);
     wl_resource* popupRes = wl_resource_create(client, &xdg_popup_interface, version, id);
@@ -264,10 +371,41 @@ static void xdg_surface_get_popup(wl_client* client, wl_resource* xdgSurfaceRes,
         return;
     }
     wl_resource_set_implementation(popupRes, &xdg_popup_interface_impl, data, nullptr);
-    if (data->surface) data->surface->xdgPopup = popupRes;
+    data->surface->xdgPopup = popupRes;
+    data->surface->isPopup = true;
 
-    // Send initial popup configure
-    xdg_popup_send_configure(popupRes, 0, 0, 100, 100);
+    // Link with parent surface
+    if (parentRes) {
+        auto* parentData = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(parentRes));
+        if (parentData && parentData->surface) {
+            data->surface->parentSurface = parentData->surface;
+            parentData->surface->popups.push_back(data->surface);
+        }
+    }
+
+    int32_t posX = 0;
+    int32_t posY = 0;
+    int32_t confW = 0;
+    int32_t confH = 0;
+
+    if (positionerRes) {
+        auto* pos = static_cast<PositionerData*>(wl_resource_get_user_data(positionerRes));
+        calculatePopupLayout(pos, posX, posY, confW, confH);
+    }
+
+    data->surface->popupX = posX;
+    data->surface->popupY = posY;
+    data->surface->popupW = confW;
+    data->surface->popupH = confH;
+
+    ALOGI("Popup surface %u assigned to parent %u at relative offset (%d, %d), size (%d, %d)",
+          data->surface->id,
+          data->surface->parentSurface ? data->surface->parentSurface->id : 0,
+          posX, posY, confW, confH);
+
+    // Send initial popup configure with calculated geometry.
+    // If width/height are 0, client sizes itself naturally without clipping!
+    xdg_popup_send_configure(popupRes, posX, posY, std::max(0, confW), std::max(0, confH));
     xdg_surface_send_configure(xdgSurfaceRes, wl_display_next_serial(wl_client_get_display(client)));
 }
 
@@ -626,9 +764,12 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
             }
 
             std::string name = "wl_surface#" + std::to_string(surface->id);
-            int32_t z = surface->isSubsurface && surface->parentSurface
-                        ? surface->parentSurface->zOrder + 5
-                        : surface->zOrder;
+            int32_t z = surface->zOrder;
+            if (surface->isSubsurface && surface->parentSurface) {
+                z = surface->parentSurface->zOrder + 5;
+            } else if (surface->isPopup && surface->parentSurface) {
+                z = surface->parentSurface->zOrder + 20;
+            }
             surface->sfLayer = mSfBridge.createLayer(
                 name,
                 layerW, layerH,
@@ -644,6 +785,17 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
             if (surface->isSubsurface && surface->parentSurface) {
                 posX = surface->parentSurface->committed.x + surface->subX;
                 posY = surface->parentSurface->committed.y + surface->subY;
+            } else if (surface->isPopup && surface->parentSurface) {
+                posX = surface->parentSurface->committed.x + surface->popupX;
+                posY = surface->parentSurface->committed.y + surface->popupY;
+                // Clamp to screen bounds so popup menu is not cut off by display edge
+                if (posX + layerW > mDisplayWidth) posX = std::max(0, mDisplayWidth - layerW);
+                if (posY + layerH > mDisplayHeight) posY = std::max(0, mDisplayHeight - layerH);
+                if (posX < 0) posX = 0;
+                if (posY < 0) posY = 0;
+                ALOGI("Popup surface %u anchored at (%d, %d), size %dx%d (parent at %d, %d)",
+                      surface->id, posX, posY, layerW, layerH,
+                      surface->parentSurface->committed.x, surface->parentSurface->committed.y);
             } else if (layerW < mDisplayWidth || layerH < mDisplayHeight) {
                 posX = std::max(0, (mDisplayWidth - layerW) / 2);
                 posY = std::max(surface->hasDecor ? surface->decorHeight : 0, (mDisplayHeight - layerH) / 2);
@@ -672,6 +824,22 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
                     sub->committed.y = sy;
                 }
             }
+            // Propagate position to any existing child popups
+            for (WaylandSurface* pop : surface->popups) {
+                if (pop && pop->sfLayer) {
+                    int32_t px = posX + pop->popupX;
+                    int32_t py = posY + pop->popupY;
+                    if (px + pop->committed.width > mDisplayWidth) px = std::max(0, mDisplayWidth - pop->committed.width);
+                    if (py + pop->committed.height > mDisplayHeight) py = std::max(0, mDisplayHeight - pop->committed.height);
+                    if (px < 0) px = 0;
+                    if (py < 0) py = 0;
+                    SurfaceFlingerBridge::Transaction popTx;
+                    popTx.setPosition(pop->sfLayer, px, py);
+                    popTx.apply();
+                    pop->committed.x = px;
+                    pop->committed.y = py;
+                }
+            }
         }
     }
 
@@ -679,6 +847,23 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
     if (surface->isSubsurface && surface->parentSurface && surface->sfLayer) {
         int32_t targetX = surface->parentSurface->committed.x + surface->subX;
         int32_t targetY = surface->parentSurface->committed.y + surface->subY;
+        if (targetX != surface->committed.x || targetY != surface->committed.y) {
+            SurfaceFlingerBridge::Transaction tx;
+            tx.setPosition(surface->sfLayer, targetX, targetY);
+            tx.apply();
+            surface->committed.x = targetX;
+            surface->committed.y = targetY;
+        }
+    }
+
+    // Keep popup position in sync with parent on commit
+    if (surface->isPopup && surface->parentSurface && surface->sfLayer) {
+        int32_t targetX = surface->parentSurface->committed.x + surface->popupX;
+        int32_t targetY = surface->parentSurface->committed.y + surface->popupY;
+        if (targetX + surface->committed.width > mDisplayWidth) targetX = std::max(0, mDisplayWidth - surface->committed.width);
+        if (targetY + surface->committed.height > mDisplayHeight) targetY = std::max(0, mDisplayHeight - surface->committed.height);
+        if (targetX < 0) targetX = 0;
+        if (targetY < 0) targetY = 0;
         if (targetX != surface->committed.x || targetY != surface->committed.y) {
             SurfaceFlingerBridge::Transaction tx;
             tx.setPosition(surface->sfLayer, targetX, targetY);
@@ -914,12 +1099,18 @@ void SurfaceBridge::destroySurface(WaylandSurface* surface) {
     if (surface->parentSurface) {
         auto& subs = surface->parentSurface->subsurfaces;
         subs.erase(std::remove(subs.begin(), subs.end(), surface), subs.end());
+        auto& pops = surface->parentSurface->popups;
+        pops.erase(std::remove(pops.begin(), pops.end(), surface), pops.end());
         surface->parentSurface = nullptr;
     }
     for (WaylandSurface* sub : surface->subsurfaces) {
         if (sub) sub->parentSurface = nullptr;
     }
     surface->subsurfaces.clear();
+    for (WaylandSurface* pop : surface->popups) {
+        if (pop) pop->parentSurface = nullptr;
+    }
+    surface->popups.clear();
 
     if (surface->decorLayer) {
         mSfBridge.destroyLayer(surface->decorLayer);

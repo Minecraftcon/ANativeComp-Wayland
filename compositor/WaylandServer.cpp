@@ -111,20 +111,6 @@ static void compositor_create_region(wl_client* client, wl_resource* /*resource*
 // ─────────────────────────────────────────────────────────────────────────────
 // xdg_wm_base (xdg-shell)
 // ─────────────────────────────────────────────────────────────────────────────
-struct PositionerData {
-    int32_t width = 0;
-    int32_t height = 0;
-    int32_t anchorX = 0;
-    int32_t anchorY = 0;
-    int32_t anchorW = 0;
-    int32_t anchorH = 0;
-    uint32_t anchor = 0;
-    uint32_t gravity = 0;
-    uint32_t constraintAdjustment = 0;
-    int32_t offsetX = 0;
-    int32_t offsetY = 0;
-    bool reactive = false;
-};
 
 static void positioner_destroy(wl_client*, wl_resource* resource) {
     wl_resource_destroy(resource);

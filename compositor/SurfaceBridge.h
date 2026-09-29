@@ -31,6 +31,22 @@ class SurfaceFlingerBridge;
 struct SFLayer;
 using SFLayerHandle = std::shared_ptr<SFLayer>;
 
+// Positioner data for xdg_positioner
+struct PositionerData {
+    int32_t width = 0;
+    int32_t height = 0;
+    int32_t anchorX = 0;
+    int32_t anchorY = 0;
+    int32_t anchorW = 0;
+    int32_t anchorH = 0;
+    uint32_t anchor = 0;
+    uint32_t gravity = 0;
+    uint32_t constraintAdjustment = 0;
+    int32_t offsetX = 0;
+    int32_t offsetY = 0;
+    bool reactive = false;
+};
+
 // ────────────────────────────────────────────────────────────────────────────
 // WaylandSurface — internal state per wl_surface
 // ────────────────────────────────────────────────────────────────────────────
@@ -87,6 +103,14 @@ struct WaylandSurface {
     int32_t                      subX = 0;
     int32_t                      subY = 0;
     bool                         isSubsurface = false;
+
+    // Popup relationship
+    bool                         isPopup = false;
+    int32_t                      popupX = 0;
+    int32_t                      popupY = 0;
+    int32_t                      popupW = 0;
+    int32_t                      popupH = 0;
+    std::vector<WaylandSurface*> popups;
 
     // Frame callbacks (for client-side frame pacing)
     std::vector<wl_resource*> frameCallbacks;
