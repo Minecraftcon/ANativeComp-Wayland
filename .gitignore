@@ -1,0 +1,90 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Build output
+# ─────────────────────────────────────────────────────────────────────────────
+build/
+out/
+*.o
+*.a
+*.so
+*.so.*
+*.d
+compile_commands.json
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+.ninja_deps
+.ninja_log
+build.ninja
+
+# Binaries (kept out of tree; the build dir is ignored anyway)
+andwayland
+ANativeDrawer
+interactive_window
+*_client
+hello_window
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Vendored third-party sources
+#
+# All of these are reproducible from pinned upstream commits/tarballs — see
+# third_party/PINS.md for the exact revisions. They total ~26 MB and six of
+# them are separate git repositories, so committing them would nest repos
+# inside this one and bloat every clone.
+# ─────────────────────────────────────────────────────────────────────────────
+third_party/*
+# ...but keep the pin manifest, which is hand-written and must be tracked.
+# Note: the directory itself must not be excluded, or git never descends into
+# it and the negation below would have no effect.
+!/third_party/PINS.md
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Device sysroot
+#
+# lib64 stubs pulled off a rooted device. Device-specific; every developer
+# extracts their own. See HANDOVER.md.
+# ─────────────────────────────────────────────────────────────────────────────
+device-sysroot/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Generated Wayland protocol bindings
+#
+# Regenerated from protocols/*/**.xml by wayland-scanner at build time.
+# ─────────────────────────────────────────────────────────────────────────────
+protocols/generated/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NDK / toolchain
+# ─────────────────────────────────────────────────────────────────────────────
+android.toolchain.cmake
+.cxx/
+*.ndk
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Runtime / logs / local scratch
+# ─────────────────────────────────────────────────────────────────────────────
+*.log
+wayland-*.lock
+/data/
+*.sh.tmp
+
+# Test captures
+*.png
+!docs/**/*.png
+/screenshots/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Editor / OS
+# ─────────────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.cache/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ASAN / sanitizer output
+*.asan
+*.profraw
+*.profdata

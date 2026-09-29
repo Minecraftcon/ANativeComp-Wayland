@@ -1,0 +1,7 @@
+id=andwayland
+name=ANativeDrawer Wayland Compositor
+version=v0.1.0
+versionCode=1
+author=ANativeDrawer
+description=Full Wayland compositor backed by Android SurfaceFlinger. Runs Linux apps on Android with native performance.
+minMagisk=20400

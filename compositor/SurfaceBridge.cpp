@@ -1,0 +1,782 @@
+/**
+ * SurfaceBridge.cpp
+ *
+ * Implements the core Wayland → SurfaceFlinger mapping.
+ *
+ * Key flows:
+ *   wl_compositor.create_surface → allocate WaylandSurface (lazy SF layer)
+ *   wl_surface.attach(buffer) → store pending buffer
+ *   wl_surface.commit → call commitSurface() which:
+ *       1. Creates a SurfaceFlinger layer if not yet created (lazy init)
+ *       2. Blits the wl_shm_buffer into the layer's ANativeWindow_Buffer
+ *          (or imports DMA-BUF zero-copy for GPU clients)
+ *       3. Calls surface->unlockAndPost() → SurfaceFlinger composites the frame
+ *       4. Sends wl_buffer.release() back to the client
+ *       5. Fires frame callbacks so the client knows when to render again
+ */
+
+#include "SurfaceBridge.h"
+#include "SeatManager.h"
+#include "../platform/SurfaceFlingerBridge.h"
+
+// libwayland-server
+#include <wayland-server.h>
+#include <wayland-server-protocol.h>
+
+// xdg-shell generated bindings
+#include "xdg-shell-protocol.h"
+
+#include <android/log.h>
+#include <sys/mman.h>
+#include <cstring>
+#include <cassert>
+
+#define LOG_TAG "andwayland:Bridge"
+#define ALOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+#define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+namespace andwayland {
+
+// ─────────────────────────────────────────────────────────────────────────────
+// wl_surface interface implementation (static C callbacks)
+// ─────────────────────────────────────────────────────────────────────────────
+
+static void surface_destroy(wl_client*, wl_resource* resource) {
+    auto* bridge = static_cast<SurfaceBridge*>(
+        wl_resource_get_user_data(resource));
+    WaylandSurface* surface = bridge->surfaceFromResource(resource);
+    if (surface) bridge->destroySurface(surface);
+    wl_resource_destroy(resource);
+}
+
+static void surface_attach(wl_client*, wl_resource* resource,
+                            wl_resource* buffer, int32_t dx, int32_t dy) {
+    auto* bridge   = static_cast<SurfaceBridge*>(wl_resource_get_user_data(resource));
+    auto* surface  = bridge->surfaceFromResource(resource);
+    if (!surface) return;
+
+    surface->pending.buffer    = buffer;
+    surface->pending.dx        = dx;
+    surface->pending.dy        = dy;
+    surface->pending.hasBuffer = (buffer != nullptr);
+}
+
+static void surface_damage(wl_client*, wl_resource* resource,
+                           int32_t x, int32_t y, int32_t w, int32_t h) {
+    auto* bridge  = static_cast<SurfaceBridge*>(wl_resource_get_user_data(resource));
+    auto* surface = bridge->surfaceFromResource(resource);
+    if (surface) surface->pending.damage.add(x, y, w, h);
+}
+
+static void surface_damage_buffer(wl_client*, wl_resource* resource,
+                                  int32_t x, int32_t y, int32_t w, int32_t h) {
+    // Same as damage() in surface coordinates; buffer coordinates match here
+    // because we ignore buffer scale/transform.
+    auto* bridge  = static_cast<SurfaceBridge*>(wl_resource_get_user_data(resource));
+    auto* surface = bridge->surfaceFromResource(resource);
+    if (surface) surface->pending.damage.add(x, y, w, h);
+}
+
+static void surface_frame(wl_client* client, wl_resource* resource, uint32_t callback_id) {
+    auto* bridge  = static_cast<SurfaceBridge*>(wl_resource_get_user_data(resource));
+    auto* surface = bridge->surfaceFromResource(resource);
+    if (!surface) return;
+
+    wl_resource* cb = wl_resource_create(client, &wl_callback_interface, 1, callback_id);
+    if (cb) {
+        surface->frameCallbacks.push_back(cb);
+    }
+}
+
+static void surface_set_opaque_region(wl_client*, wl_resource*, wl_resource*) {}
+static void surface_set_input_region(wl_client*, wl_resource*, wl_resource*) {}
+
+static void surface_commit(wl_client*, wl_resource* resource) {
+    auto* bridge  = static_cast<SurfaceBridge*>(wl_resource_get_user_data(resource));
+    auto* surface = bridge->surfaceFromResource(resource);
+    if (!surface) return;
+    bridge->commitSurface(surface);
+}
+
+static void surface_set_buffer_transform(wl_client*, wl_resource*, int32_t) {}
+static void surface_set_buffer_scale(wl_client*, wl_resource*, int32_t) {}
+static void surface_offset(wl_client*, wl_resource*, int32_t, int32_t) {}
+
+static const struct wl_surface_interface surface_interface = {
+    .destroy               = surface_destroy,
+    .attach                = surface_attach,
+    .damage                = surface_damage,
+    .frame                 = surface_frame,
+    .set_opaque_region     = surface_set_opaque_region,
+    .set_input_region      = surface_set_input_region,
+    .commit                = surface_commit,
+    .set_buffer_transform  = surface_set_buffer_transform,
+    .set_buffer_scale      = surface_set_buffer_scale,
+    .damage_buffer         = surface_damage_buffer,
+    .offset                = surface_offset,
+};
+
+static void surface_resource_destructor(wl_resource* resource) {
+    // Runs whenever the wl_resource dies — including implicitly when a client
+    // disconnects and libwayland reaps its resources. destroySurface() is
+    // idempotent here: an explicit destroy request removes the map entry first,
+    // so surfaceFromResource() then returns nullptr and this is a no-op.
+    auto* bridge  = static_cast<SurfaceBridge*>(wl_resource_get_user_data(resource));
+    if (!bridge) return;
+    WaylandSurface* surface = bridge->surfaceFromResource(resource);
+    if (surface) bridge->destroySurface(surface);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// wl_shm_pool / wl_buffer (CPU shared memory path)
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct ShmPool {
+    void*   data = nullptr;
+    int32_t size = 0;
+    int     fd   = -1;
+};
+
+struct ShmBuffer {
+    ShmPool* pool   = nullptr;
+    int32_t  offset = 0;
+    int32_t  width  = 0;
+    int32_t  height = 0;
+    int32_t  stride = 0;
+    uint32_t format = WL_SHM_FORMAT_ARGB8888;
+};
+
+static void shm_pool_create_buffer(wl_client* client, wl_resource* resource,
+                                   uint32_t id,
+                                   int32_t offset, int32_t width, int32_t height,
+                                   int32_t stride, uint32_t format);
+static void shm_pool_destroy(wl_client*, wl_resource* resource) {
+    auto* pool = static_cast<ShmPool*>(wl_resource_get_user_data(resource));
+    if (pool && pool->data) {
+        munmap(pool->data, static_cast<size_t>(pool->size));
+    }
+    delete pool;
+}
+static void shm_pool_resize(wl_client*, wl_resource* resource, int32_t size) {
+    auto* pool = static_cast<ShmPool*>(wl_resource_get_user_data(resource));
+    if (!pool) return;
+    void* newData = mremap(pool->data, static_cast<size_t>(pool->size),
+                           static_cast<size_t>(size), MREMAP_MAYMOVE);
+    if (newData != MAP_FAILED) {
+        pool->data = newData;
+        pool->size = size;
+    }
+}
+
+static const struct wl_shm_pool_interface shm_pool_interface = {
+    .create_buffer = shm_pool_create_buffer,
+    .destroy       = shm_pool_destroy,
+    .resize        = shm_pool_resize,
+};
+
+static void shm_pool_destructor(wl_resource* resource) {
+    // pool already destroyed via shm_pool_destroy
+    (void)resource;
+}
+
+static void buffer_destroy(wl_client*, wl_resource* resource) {
+    // The ShmBuffer is owned by the resource destroy handler installed in
+    // shm_pool_create_buffer(); wl_resource_destroy() invokes it exactly once.
+    wl_resource_destroy(resource);
+}
+
+static const struct wl_buffer_interface shm_buffer_interface = {
+    .destroy = buffer_destroy,
+};
+
+static void shm_pool_create_buffer(wl_client* client, wl_resource* resource,
+                                   uint32_t id,
+                                   int32_t offset, int32_t width, int32_t height,
+                                   int32_t stride, uint32_t format) {
+    auto* pool = static_cast<ShmPool*>(wl_resource_get_user_data(resource));
+
+    auto* buf   = new ShmBuffer();
+    buf->pool   = pool;
+    buf->offset = offset;
+    buf->width  = width;
+    buf->height = height;
+    buf->stride = stride;
+    buf->format = format;
+
+    wl_resource* bufResource = wl_resource_create(client, &wl_buffer_interface, 1, id);
+    wl_resource_set_implementation(bufResource, &shm_buffer_interface,
+                                   buf,
+                                   [](wl_resource* r) {
+                                       delete static_cast<ShmBuffer*>(
+                                           wl_resource_get_user_data(r));
+                                   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// xdg_surface / xdg_toplevel / xdg_popup
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct XdgSurfaceData {
+    SurfaceBridge*  bridge  = nullptr;
+    WaylandSurface* surface = nullptr;
+};
+
+static void xdg_surface_ack_configure(wl_client*, wl_resource*, uint32_t) {}
+static void xdg_surface_set_window_geometry(wl_client*, wl_resource*,
+                                             int32_t, int32_t, int32_t, int32_t) {}
+
+static void xdg_surface_get_toplevel(wl_client* client, wl_resource* xdgSurfaceRes, uint32_t id);
+static void xdg_surface_get_popup(wl_client* client, wl_resource* xdgSurfaceRes, uint32_t id,
+                                   wl_resource* parentRes, wl_resource* positionerRes);
+
+static const struct xdg_surface_interface xdg_surface_interface_impl = {
+    .destroy             = [](wl_client*, wl_resource* r) { wl_resource_destroy(r); },
+    .get_toplevel        = xdg_surface_get_toplevel,
+    .get_popup           = xdg_surface_get_popup,
+    .set_window_geometry = xdg_surface_set_window_geometry,
+    .ack_configure       = xdg_surface_ack_configure,
+};
+
+// xdg_popup
+static void xdg_popup_destroy(wl_client*, wl_resource* resource) {
+    wl_resource_destroy(resource);
+}
+static void xdg_popup_grab(wl_client*, wl_resource*, wl_resource*, uint32_t) {}
+static void xdg_popup_reposition(wl_client*, wl_resource*, wl_resource*, uint32_t) {}
+
+static const struct xdg_popup_interface xdg_popup_interface_impl = {
+    .destroy    = xdg_popup_destroy,
+    .grab       = xdg_popup_grab,
+    .reposition = xdg_popup_reposition,
+};
+
+static void xdg_surface_get_popup(wl_client* client, wl_resource* xdgSurfaceRes, uint32_t id,
+                                   wl_resource* /*parentRes*/, wl_resource* /*positionerRes*/) {
+    auto* data = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(xdgSurfaceRes));
+    if (!data) return;
+
+    int version = wl_resource_get_version(xdgSurfaceRes);
+    wl_resource* popupRes = wl_resource_create(client, &xdg_popup_interface, version, id);
+    if (!popupRes) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(popupRes, &xdg_popup_interface_impl, data, nullptr);
+    if (data->surface) data->surface->xdgPopup = popupRes;
+
+    // Send initial popup configure
+    xdg_popup_send_configure(popupRes, 0, 0, 100, 100);
+    xdg_surface_send_configure(xdgSurfaceRes, wl_display_next_serial(wl_client_get_display(client)));
+}
+
+// xdg_toplevel
+static void xdg_toplevel_set_title(wl_client*, wl_resource* resource, const char* title) {
+    auto* data = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(resource));
+    if (data && data->surface) {
+        data->surface->title = title ? title : "";
+        ALOGI("Surface %u title: '%s'", data->surface->id, data->surface->title.c_str());
+    }
+}
+static void xdg_toplevel_set_app_id(wl_client*, wl_resource* resource, const char* app_id) {
+    auto* data = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(resource));
+    if (data && data->surface) {
+        data->surface->appId = app_id ? app_id : "";
+        ALOGI("Surface %u app_id: '%s'", data->surface->id, data->surface->appId.c_str());
+    }
+}
+static void xdg_toplevel_set_fullscreen(wl_client* client, wl_resource* resource, wl_resource*) {
+    auto* data = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(resource));
+    if (!data || !data->surface || !data->bridge) return;
+
+    data->surface->isFullscreen = true;
+    struct wl_array states;
+    wl_array_init(&states);
+    uint32_t* s = static_cast<uint32_t*>(wl_array_add(&states, sizeof(uint32_t)));
+    *s = XDG_TOPLEVEL_STATE_FULLSCREEN;
+    uint32_t* a = static_cast<uint32_t*>(wl_array_add(&states, sizeof(uint32_t)));
+    *a = XDG_TOPLEVEL_STATE_ACTIVATED;
+
+    xdg_toplevel_send_configure(resource, data->bridge->displayWidth(), data->bridge->displayHeight(), &states);
+    wl_array_release(&states);
+    if (data->surface->xdgSurface) {
+        xdg_surface_send_configure(data->surface->xdgSurface, wl_display_next_serial(wl_client_get_display(client)));
+    }
+    ALOGI("Configured surface %u as FULLSCREEN (%dx%d)",
+          data->surface->id, data->bridge->displayWidth(), data->bridge->displayHeight());
+}
+static void xdg_toplevel_unset_fullscreen(wl_client* client, wl_resource* resource) {
+    auto* data = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(resource));
+    if (!data || !data->surface || !data->bridge) return;
+
+    data->surface->isFullscreen = false;
+    struct wl_array states;
+    wl_array_init(&states);
+    uint32_t* a = static_cast<uint32_t*>(wl_array_add(&states, sizeof(uint32_t)));
+    *a = XDG_TOPLEVEL_STATE_ACTIVATED;
+
+    xdg_toplevel_send_configure(resource, 0, 0, &states);
+    wl_array_release(&states);
+    if (data->surface->xdgSurface) {
+        xdg_surface_send_configure(data->surface->xdgSurface, wl_display_next_serial(wl_client_get_display(client)));
+    }
+}
+static void xdg_toplevel_set_maximized(wl_client* client, wl_resource* resource) {
+    auto* data = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(resource));
+    if (!data || !data->surface || !data->bridge) return;
+
+    struct wl_array states;
+    wl_array_init(&states);
+    uint32_t* s = static_cast<uint32_t*>(wl_array_add(&states, sizeof(uint32_t)));
+    *s = XDG_TOPLEVEL_STATE_MAXIMIZED;
+    uint32_t* a = static_cast<uint32_t*>(wl_array_add(&states, sizeof(uint32_t)));
+    *a = XDG_TOPLEVEL_STATE_ACTIVATED;
+
+    xdg_toplevel_send_configure(resource, data->bridge->displayWidth(), data->bridge->displayHeight(), &states);
+    wl_array_release(&states);
+    if (data->surface->xdgSurface) {
+        xdg_surface_send_configure(data->surface->xdgSurface, wl_display_next_serial(wl_client_get_display(client)));
+    }
+}
+static void xdg_toplevel_unset_maximized(wl_client* client, wl_resource* resource) {
+    auto* data = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(resource));
+    if (!data || !data->surface) return;
+
+    struct wl_array states;
+    wl_array_init(&states);
+    uint32_t* a = static_cast<uint32_t*>(wl_array_add(&states, sizeof(uint32_t)));
+    *a = XDG_TOPLEVEL_STATE_ACTIVATED;
+
+    xdg_toplevel_send_configure(resource, 0, 0, &states);
+    wl_array_release(&states);
+    if (data->surface->xdgSurface) {
+        xdg_surface_send_configure(data->surface->xdgSurface, wl_display_next_serial(wl_client_get_display(client)));
+    }
+}
+static void xdg_toplevel_set_minimized(wl_client*, wl_resource*) {}
+static void xdg_toplevel_move(wl_client*, wl_resource*, wl_resource*, uint32_t) {}
+static void xdg_toplevel_resize(wl_client*, wl_resource*, wl_resource*, uint32_t, uint32_t) {}
+static void xdg_toplevel_set_parent(wl_client*, wl_resource*, wl_resource*) {}
+static void xdg_toplevel_show_window_menu(wl_client*, wl_resource*, wl_resource*, uint32_t, int32_t, int32_t) {}
+static void xdg_toplevel_set_min_size(wl_client*, wl_resource*, int32_t, int32_t) {}
+static void xdg_toplevel_set_max_size(wl_client*, wl_resource*, int32_t, int32_t) {}
+
+static const struct xdg_toplevel_interface xdg_toplevel_interface_impl = {
+    .destroy           = [](wl_client*, wl_resource* r) { wl_resource_destroy(r); },
+    .set_parent        = xdg_toplevel_set_parent,
+    .set_title         = xdg_toplevel_set_title,
+    .set_app_id        = xdg_toplevel_set_app_id,
+    .show_window_menu  = xdg_toplevel_show_window_menu,
+    .move              = xdg_toplevel_move,
+    .resize            = xdg_toplevel_resize,
+    .set_max_size      = xdg_toplevel_set_max_size,
+    .set_min_size      = xdg_toplevel_set_min_size,
+    .set_maximized     = xdg_toplevel_set_maximized,
+    .unset_maximized   = xdg_toplevel_unset_maximized,
+    .set_fullscreen    = xdg_toplevel_set_fullscreen,
+    .unset_fullscreen  = xdg_toplevel_unset_fullscreen,
+    .set_minimized     = xdg_toplevel_set_minimized,
+};
+
+static void xdg_surface_get_toplevel(wl_client* client, wl_resource* xdgSurfaceRes, uint32_t id) {
+    auto* data = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(xdgSurfaceRes));
+
+    wl_resource* toplevelRes = wl_resource_create(client, &xdg_toplevel_interface, 5, id);
+    wl_resource_set_implementation(toplevelRes, &xdg_toplevel_interface_impl,
+                                   data, nullptr);
+    if (data && data->surface) {
+        data->surface->xdgToplevel = toplevelRes;
+    }
+
+    // Send configure (width=0, height=0 means "compositor doesn't care")
+    // The client uses its preferred size
+    struct wl_array states;
+    wl_array_init(&states);
+    xdg_toplevel_send_configure(toplevelRes, 0, 0, &states);
+    wl_array_release(&states);
+    xdg_surface_send_configure(xdgSurfaceRes, wl_display_next_serial(
+        wl_client_get_display(client)));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// wl_output
+// ─────────────────────────────────────────────────────────────────────────────
+static const struct wl_output_interface output_interface = {
+    .release = [](wl_client*, wl_resource* r) { wl_resource_destroy(r); },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SurfaceBridge
+// ─────────────────────────────────────────────────────────────────────────────
+
+SurfaceBridge::SurfaceBridge(SurfaceFlingerBridge& sfBridge)
+    : mSfBridge(sfBridge) {
+    auto info      = sfBridge.getDisplayInfo();
+    mDisplayWidth  = info.width;
+    mDisplayHeight = info.height;
+    ALOGI("Display: %dx%d @ %.1fHz", mDisplayWidth, mDisplayHeight, info.refreshRate);
+}
+
+SurfaceBridge::~SurfaceBridge() = default;
+
+void SurfaceBridge::createSurface(wl_client* client, uint32_t id) {
+    wl_resource* resource = wl_resource_create(client, &wl_surface_interface, 5, id);
+    if (!resource) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+
+    auto surface       = std::make_unique<WaylandSurface>();
+    surface->id        = id;
+    surface->resource  = resource;
+    surface->zOrder    = allocateZOrder();
+
+    wl_resource_set_implementation(resource, &surface_interface,
+                                   this, surface_resource_destructor);
+
+    mSurfaces[resource] = std::move(surface);
+    ALOGI("wl_surface created: id=%u", id);
+}
+
+void SurfaceBridge::createShmPool(wl_client* client, uint32_t id, int fd, int32_t size) {
+    void* data = mmap(nullptr, static_cast<size_t>(size),
+                      PROT_READ, MAP_SHARED, fd, 0);
+    if (data == MAP_FAILED) {
+        ALOGE("mmap() failed for shm pool fd=%d size=%d: %m", fd, size);
+        wl_client_post_no_memory(client);
+        return;
+    }
+
+    auto* pool  = new ShmPool();
+    pool->data  = data;
+    pool->size  = size;
+    pool->fd    = fd;
+
+    wl_resource* poolRes = wl_resource_create(client, &wl_shm_pool_interface, 1, id);
+    wl_resource_set_implementation(poolRes, &shm_pool_interface, pool,
+                                   shm_pool_destructor);
+}
+
+void SurfaceBridge::getXdgSurface(wl_client* client, uint32_t id, wl_resource* surfaceResource) {
+    auto* surface = surfaceFromResource(surfaceResource);
+    if (!surface) {
+        ALOGE("getXdgSurface: unknown wl_surface resource");
+        return;
+    }
+
+    wl_resource* xdgRes = wl_resource_create(client, &xdg_surface_interface, 5, id);
+    auto* data = new XdgSurfaceData{this, surface};
+    wl_resource_set_implementation(xdgRes, &xdg_surface_interface_impl, data, [](wl_resource* r) {
+        delete static_cast<XdgSurfaceData*>(wl_resource_get_user_data(r));
+    });
+    surface->xdgSurface = xdgRes;
+}
+
+void SurfaceBridge::bindOutput(wl_client* client, uint32_t version, uint32_t id) {
+    wl_resource* resource = wl_resource_create(client, &wl_output_interface,
+                                               static_cast<int>(version), id);
+    if (!resource) { wl_client_post_no_memory(client); return; }
+    wl_resource_set_implementation(resource, &output_interface, this, nullptr);
+
+    // Send output geometry
+    wl_output_send_geometry(resource,
+        0, 0,                      // x, y (position in global compositor space)
+        0, 0,                      // physical width/height mm (0 = unknown)
+        WL_OUTPUT_SUBPIXEL_UNKNOWN,
+        "ANativeDrawer",           // make
+        "Android Display",         // model
+        WL_OUTPUT_TRANSFORM_NORMAL);
+
+    // Send mode
+    wl_output_send_mode(resource,
+        WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED,
+        mDisplayWidth, mDisplayHeight,
+        60000); // 60Hz in mHz
+
+    if (version >= 2) wl_output_send_scale(resource, 1);
+    if (version >= 4) {
+        wl_output_send_name(resource, "Android-0");
+        wl_output_send_description(resource, "Android Primary Display");
+    }
+    if (version >= 2) wl_output_send_done(resource);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// commitSurface — the hot path
+// ─────────────────────────────────────────────────────────────────────────────
+void SurfaceBridge::commitSurface(WaylandSurface* surface) {
+    // ── 1. Lazy-create the SurfaceFlinger layer ───────────────────────────────
+    if (!surface->sfLayer) {
+        int32_t layerW = mDisplayWidth;
+        int32_t layerH = mDisplayHeight;
+
+        if (surface->pending.hasBuffer && surface->pending.buffer) {
+            struct wl_shm_buffer* shm_buffer = wl_shm_buffer_get(surface->pending.buffer);
+            if (shm_buffer) {
+                layerW = wl_shm_buffer_get_width(shm_buffer);
+                layerH = wl_shm_buffer_get_height(shm_buffer);
+            }
+        }
+
+        std::string name = "wl_surface#" + std::to_string(surface->id);
+        surface->sfLayer = mSfBridge.createLayer(
+            name,
+            layerW, layerH,
+            surface->zOrder);
+
+        if (!surface->sfLayer) {
+            ALOGE("Failed to create SurfaceFlinger layer for surface %u", surface->id);
+            return;
+        }
+
+        // Center window on screen if smaller than display
+        if (layerW < mDisplayWidth || layerH < mDisplayHeight) {
+            int32_t posX = std::max(0, (mDisplayWidth - layerW) / 2);
+            int32_t posY = std::max(0, (mDisplayHeight - layerH) / 2);
+            SurfaceFlingerBridge::Transaction tx;
+            tx.setPosition(surface->sfLayer, posX, posY);
+            tx.apply();
+            surface->committed.x = posX;
+            surface->committed.y = posY;
+            ALOGI("Windowed surface %u centered at (%d, %d), size %dx%d",
+                  surface->id, posX, posY, layerW, layerH);
+        } else {
+            surface->committed.x = 0;
+            surface->committed.y = 0;
+        }
+        surface->committed.width = layerW;
+        surface->committed.height = layerH;
+        surface->committed.mapped = true;
+    }
+
+    // ── 2. Copy/import the buffer ─────────────────────────────────────────────
+    if (surface->pending.hasBuffer && surface->pending.buffer) {
+        if (wl_shm_buffer_get(surface->pending.buffer)) {
+            blitShmBuffer(surface, surface->pending.buffer);
+        } else {
+            void* userData = wl_resource_get_user_data(surface->pending.buffer);
+            auto* shmBuf   = reinterpret_cast<ShmBuffer*>(userData);
+            if (shmBuf && shmBuf->pool && shmBuf->pool->data) {
+                blitShmBuffer(surface, surface->pending.buffer);
+            }
+        }
+        // else: DMA-BUF path (handled by LinuxDmaBuf protocol impl)
+
+        // Notify client the buffer is released and can be reused
+        wl_buffer_send_release(surface->pending.buffer);
+        surface->pending.hasBuffer = false;
+        // Damage is consumed by this commit.
+        surface->pending.damage.clear();
+    }
+
+    // ── 3. Fire frame callbacks ───────────────────────────────────────────────
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint32_t nowMs = static_cast<uint32_t>(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+    for (wl_resource* cb : surface->frameCallbacks) {
+        wl_callback_send_done(cb, nowMs);
+        wl_resource_destroy(cb);
+    }
+    surface->frameCallbacks.clear();
+}
+
+// Merge the damaged sub-rectangle of a client shm buffer into the surface's
+// persistent back buffer. The back buffer is always complete, so the copy into
+// SurfaceFlinger's freshly-dequeued buffer can be a straight full-frame blit
+// without ever exposing stale regions.
+static void mergeDamage(std::vector<uint32_t>& back, int32_t backStride,
+                        const uint8_t* src, int32_t srcStride,
+                        int32_t srcWidth, int32_t srcHeight,
+                        uint32_t format,
+                        bool fullRepaint,
+                        const SurfaceFlingerBridge::DirtyRect& r) {
+    int32_t x0 = 0, y0 = 0, x1, y1;
+    const int32_t limitW = std::min(srcWidth,  backStride);
+    const int32_t limitH = std::min(srcHeight, (int32_t)(back.size() / (backStride ? backStride : 1)));
+
+    if (fullRepaint) {
+        x1 = limitW; y1 = limitH;
+    } else {
+        x0 = std::max<int32_t>(0, std::min(r.left, limitW));
+        y0 = std::max<int32_t>(0, std::min(r.top, limitH));
+        x1 = std::max<int32_t>(0, std::min(r.right, limitW));
+        y1 = std::max<int32_t>(0, std::min(r.bottom, limitH));
+    }
+    if (x1 <= x0 || y1 <= y0) return;
+
+    const bool isXrgb = (format == WL_SHM_FORMAT_XRGB8888);
+
+    for (int32_t y = y0; y < y1; ++y) {
+        const uint8_t* srcRow = src + static_cast<size_t>(y) * srcStride
+                                      + static_cast<size_t>(x0) * 4;
+        uint32_t* dstRow = back.data() + static_cast<size_t>(y) * backStride + x0;
+        std::memcpy(dstRow, srcRow, static_cast<size_t>(x1 - x0) * 4);
+        if (isXrgb) {
+            for (int32_t x = 0; x < (x1 - x0); ++x) {
+                dstRow[x] |= 0xFF000000;
+            }
+        }
+    }
+}
+
+// Present the (always complete) back buffer into the SurfaceFlinger layer.
+static bool presentBackBuffer(SurfaceFlingerBridge& sf, SFLayerHandle layer,
+                              const std::vector<uint32_t>& back, int32_t backStride) {
+    SFLockedBuffer dst{};
+    if (!sf.lockBuffer(layer, dst, nullptr)) return false;
+
+    const int32_t copyWidth  = std::min<int32_t>(backStride, dst.width);
+    const int32_t copyHeight = std::min<int32_t>((int32_t)(back.size() / (backStride ? backStride : 1)),
+                                                 dst.height);
+    const size_t rowBytes = static_cast<size_t>(copyWidth) * 4;
+    for (int32_t y = 0; y < copyHeight; ++y) {
+        const uint8_t* srcRow = reinterpret_cast<const uint8_t*>(back.data())
+                              + static_cast<size_t>(y) * backStride * 4;
+        uint8_t* dstRow = static_cast<uint8_t*>(dst.bits)
+                        + static_cast<size_t>(y) * dst.stride * 4;
+        std::memcpy(dstRow, srcRow, rowBytes);
+    }
+    return sf.unlockAndPost(layer);
+}
+
+bool SurfaceBridge::blitShmBuffer(WaylandSurface* surface, wl_resource* bufferResource) {
+    // An empty damage rect means the client asked for a full repaint, or this
+    // is the first frame.
+    const bool fullRepaint = !surface->pending.damage.valid;
+
+    SurfaceFlingerBridge::DirtyRect r;
+    r.left   = surface->pending.damage.x1;
+    r.top    = surface->pending.damage.y1;
+    r.right  = surface->pending.damage.x2;
+    r.bottom = surface->pending.damage.y2;
+
+    struct wl_shm_buffer* shm_buffer = wl_shm_buffer_get(bufferResource);
+    const uint8_t* src = nullptr;
+    int32_t srcW = 0, srcH = 0, srcStride = 0;
+    uint32_t format = WL_SHM_FORMAT_ARGB8888;
+    bool haveSrc = false;
+
+    if (shm_buffer) {
+        wl_shm_buffer_begin_access(shm_buffer);
+        src       = static_cast<const uint8_t*>(wl_shm_buffer_get_data(shm_buffer));
+        srcW      = wl_shm_buffer_get_width(shm_buffer);
+        srcH      = wl_shm_buffer_get_height(shm_buffer);
+        srcStride = wl_shm_buffer_get_stride(shm_buffer);
+        format    = wl_shm_buffer_get_format(shm_buffer);
+        haveSrc   = (src != nullptr && srcW > 0 && srcH > 0);
+    } else {
+        auto* shmBuf = static_cast<ShmBuffer*>(wl_resource_get_user_data(bufferResource));
+        if (shmBuf && shmBuf->pool && shmBuf->pool->data) {
+            src       = static_cast<const uint8_t*>(shmBuf->pool->data) + shmBuf->offset;
+            srcW      = shmBuf->width;
+            srcH      = shmBuf->height;
+            srcStride = shmBuf->stride;
+            format    = shmBuf->format;
+            haveSrc   = true;
+        }
+    }
+
+    if (!haveSrc) {
+        if (shm_buffer) wl_shm_buffer_end_access(shm_buffer);
+        return false;
+    }
+
+    // Dynamic layer resize when buffer geometry changes
+    if (surface->sfLayer && (surface->committed.width != srcW || surface->committed.height != srcH)) {
+        mSfBridge.resizeLayer(surface->sfLayer, srcW, srcH);
+        if (srcW < mDisplayWidth || srcH < mDisplayHeight) {
+            int32_t posX = std::max(0, (mDisplayWidth - srcW) / 2);
+            int32_t posY = std::max(0, (mDisplayHeight - srcH) / 2);
+            SurfaceFlingerBridge::Transaction tx;
+            tx.setPosition(surface->sfLayer, posX, posY);
+            tx.apply();
+            surface->committed.x = posX;
+            surface->committed.y = posY;
+        }
+    }
+
+    // Resize (or invalidate) the back buffer when the client changes size, and
+    // force a full repaint in that case — a resized image can't be patched.
+    bool resized = false;
+    if (surface->backStride != srcW || surface->backHeight != srcH) {
+        surface->backStride = srcW;
+        surface->backWidth  = srcW;
+        surface->backHeight = srcH;
+        surface->backBuffer.assign(static_cast<size_t>(srcW) * srcH, 0);
+        resized = true;
+    }
+    const bool full = fullRepaint || resized || surface->backBuffer.empty();
+
+    mergeDamage(surface->backBuffer, surface->backStride,
+                src, srcStride, srcW, srcH, format, full, r);
+
+    if (shm_buffer) wl_shm_buffer_end_access(shm_buffer);
+
+    if (!presentBackBuffer(mSfBridge, surface->sfLayer,
+                           surface->backBuffer, surface->backStride)) {
+        ALOGE("present failed for surface %u", surface->id);
+        return false;
+    }
+
+    ALOGI("blitShmBuffer: %dx%d src fmt=0x%x, %s damage", srcW, srcH, format, full ? "full" : "partial");
+
+    surface->committed.width  = srcW;
+    surface->committed.height = srcH;
+    surface->committed.mapped = true;
+    return true;
+}
+
+WaylandSurface* SurfaceBridge::surfaceFromResource(wl_resource* resource) {
+    auto it = mSurfaces.find(resource);
+    return (it != mSurfaces.end()) ? it->second.get() : nullptr;
+}
+
+void SurfaceBridge::destroySurface(WaylandSurface* surface) {
+    if (!surface) return;
+    if (mSeat) {
+        mSeat->notifySurfaceDestroyed(surface->resource);
+    }
+    if (surface->sfLayer) {
+        mSfBridge.destroyLayer(surface->sfLayer);
+    }
+    // Frame callbacks are orphaned; destroy them
+    for (wl_resource* cb : surface->frameCallbacks) {
+        wl_resource_destroy(cb);
+    }
+    surface->frameCallbacks.clear();
+    mSurfaces.erase(surface->resource);
+    ALOGI("wl_surface destroyed");
+}
+
+WaylandSurface* SurfaceBridge::surfaceAt(int32_t screenX, int32_t screenY,
+                                        int32_t* outLocalX, int32_t* outLocalY) {
+    WaylandSurface* best = nullptr;
+    int32_t bestZ = -1;
+
+    for (const auto& [res, surf] : mSurfaces) {
+        if (!surf || !surf->committed.mapped) continue;
+        int32_t sx = surf->committed.x;
+        int32_t sy = surf->committed.y;
+        int32_t sw = surf->committed.width;
+        int32_t sh = surf->committed.height;
+
+        if (screenX >= sx && screenX < sx + sw &&
+            screenY >= sy && screenY < sy + sh) {
+            if (surf->zOrder > bestZ) {
+                best = surf.get();
+                bestZ = surf->zOrder;
+            }
+        }
+    }
+
+    if (best) {
+        if (outLocalX) *outLocalX = screenX - best->committed.x;
+        if (outLocalY) *outLocalY = screenY - best->committed.y;
+    }
+    return best;
+}
+
+int32_t SurfaceBridge::allocateZOrder() {
+    return mNextZOrder++;
+}
+
+} // namespace andwayland

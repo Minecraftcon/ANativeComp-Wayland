@@ -1,0 +1,73 @@
+// Android.bp — AOSP build system integration
+// Add to PRODUCT_PACKAGES to bake into a custom ROM
+
+cc_binary {
+    name: "andwayland",
+    srcs: [
+        "compositor/main.cpp",
+        "compositor/WaylandServer.cpp",
+        "compositor/SurfaceBridge.cpp",
+        "compositor/LayerCompositor.cpp",
+        "compositor/SeatManager.cpp",
+        "compositor/ExtensionRegistry.cpp",
+        "platform/SurfaceFlingerBridge.cpp",
+        "platform/InputReader.cpp",
+        "platform/DisplayManager.cpp",
+        "platform/AHardwareBufferHelper.cpp",
+        "protocols/xdg_shell/XdgShell.cpp",
+        "protocols/linux_dmabuf/LinuxDmaBuf.cpp",
+        "protocols/layer_shell/LayerShell.cpp",
+        "protocols/viewporter/Viewporter.cpp",
+        "xwayland/XWaylandManager.cpp",
+        // Generated protocol bindings
+        "protocols/generated/xdg-shell-protocol.c",
+        "protocols/generated/linux-dmabuf-protocol.c",
+        "protocols/generated/layer-shell-protocol.c",
+        "protocols/generated/viewporter-protocol.c",
+    ],
+
+    shared_libs: [
+        "libgui",
+        "libui",
+        "libbinder",
+        "libhardware",
+        "liblog",
+        "libcutils",
+        "libutils",
+        "libEGL",
+        "libGLESv2",
+        "libinput",
+        "libandroid",
+    ],
+
+    static_libs: [
+        "libwayland-server",  // Pre-built or in tree
+    ],
+
+    local_include_dirs: [
+        ".",
+        "compositor",
+        "platform",
+        "protocols/generated",
+    ],
+
+    cflags: [
+        "-Wall",
+        "-Wextra",
+        "-Wno-unused-parameter",
+        "-fvisibility=hidden",
+        "-DANDWAYLAND_VERSION=\"0.1.0\"",
+        "-DENABLE_XWAYLAND",
+        "-DENABLE_DMABUF",
+        "-DENABLE_LAYER_SHELL",
+    ],
+
+    cppflags: [
+        "-std=c++17",
+    ],
+
+    init_rc: ["packaging/aosp/andwayland.rc"],
+
+    // Install to /system/bin
+    vendor: false,
+}
