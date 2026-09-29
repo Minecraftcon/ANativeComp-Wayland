@@ -107,36 +107,6 @@ static void compositor_create_region(wl_client* client, wl_resource* /*resource*
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// wl_shm implementation
-// ─────────────────────────────────────────────────────────────────────────────
-static void shm_create_pool(wl_client* client, wl_resource* resource,
-                            uint32_t id, int32_t fd, int32_t size);
-
-static const struct wl_shm_interface shm_interface = {
-    .create_pool = shm_create_pool,
-};
-
-static void shm_bind(wl_client* client, void* data, uint32_t version, uint32_t id) {
-    wl_resource* resource = wl_resource_create(client, &wl_shm_interface,
-                                               static_cast<int>(version), id);
-    if (!resource) {
-        wl_client_post_no_memory(client);
-        return;
-    }
-    wl_resource_set_implementation(resource, &shm_interface, data, nullptr);
-
-    // Advertise supported pixel formats
-    wl_shm_send_format(resource, WL_SHM_FORMAT_ARGB8888);
-    wl_shm_send_format(resource, WL_SHM_FORMAT_XRGB8888);
-}
-
-static void shm_create_pool(wl_client* client, wl_resource* resource,
-                            uint32_t id, int32_t fd, int32_t size) {
-    auto* bridge = static_cast<SurfaceBridge*>(wl_resource_get_user_data(resource));
-    bridge->createShmPool(client, id, fd, size);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // xdg_wm_base (xdg-shell)
 // ─────────────────────────────────────────────────────────────────────────────
 struct PositionerData {

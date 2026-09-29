@@ -262,16 +262,13 @@ static void redraw() {
 
     draw_text(g_pixels, W, 45, 215, g_lastEvent, 2, 0xFF94A3B8);
 
-    // 6. Draw Ripple Indicator at last tap position. The previous ring is
-    // erased first — with a persistent buffer the old pixels would otherwise
-    // stay on screen forever. Clamp to the free area below the info card so the
-    // erase never punches a hole through it.
-    if (g_prevX >= 0 && g_prevY >= 0) {
+    // 6. Draw Ripple Indicator in the interaction area (below info card)
+    if (g_prevX >= 0 && g_prevY >= 280) {
         int ex = g_prevX - 28; if (ex < 0) ex = 0; if (ex > W - 56) ex = W - 56;
-        int ey = g_prevY - 28; if (ey < 258) ey = 258; if (ey > H - 56) ey = H - 56;
+        int ey = g_prevY - 28; if (ey < 252) ey = 252; if (ey > H - 56) ey = H - 56;
         fill_rect(g_pixels, W, ex, ey, 56, 56, 0xFF0E1117);
     }
-    if (g_lastX >= 0 && g_lastY >= 0 && g_lastX < W && g_lastY < H) {
+    if (g_lastX >= 0 && g_lastY >= 280 && g_lastX < W && g_lastY < H - 20) {
         draw_ring(g_pixels, W, g_lastX, g_lastY, 24, 3, 0xFFFF007F); // Neon Magenta Ring
         draw_circle(g_pixels, W, g_lastX, g_lastY, 5, 0xFFFFFFFF);    // Center white dot
     }

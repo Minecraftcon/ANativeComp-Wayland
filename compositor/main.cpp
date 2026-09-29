@@ -145,19 +145,13 @@ int main(int argc, char* argv[]) {
     ALOGI("  Display: %dx%d", bridge->displayWidth(), bridge->displayHeight());
     ALOGI("Set WAYLAND_DISPLAY=%s in client environment.", socketName);
 
-    // ── 4. Start input reader thread ──────────────────────────────────────────
-    std::thread inputThread([&seat]() {
-        seat->run();
-    });
-
-    // ── 5. Run Wayland event loop (main thread blocks here) ───────────────────
+    // ── 4. Run Wayland event loop (main thread blocks here; evdev events are dispatched via wl_event_loop fds) ──
     server.run();
 
-    // ── 6. Cleanup ────────────────────────────────────────────────────────────
+    // ── 5. Cleanup ────────────────────────────────────────────────────────────
     ALOGI("Shutting down...");
     if (testLayer) sfBridge.destroyLayer(testLayer);
     seat->stop();
-    if (inputThread.joinable()) inputThread.join();
     sfBridge.shutdown();
 
     ALOGI("Goodbye.");
