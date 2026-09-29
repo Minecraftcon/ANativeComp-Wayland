@@ -75,6 +75,31 @@ struct EvdevDevice {
     struct wl_event_source* source = nullptr;
 };
 
+enum class PointerGestureState {
+    IDLE,
+    PENDING_DECISION,
+    SCROLLING,
+    DRAGGING_SELECTION,
+    HOLD_TRIGGERED
+};
+
+struct PointerGestureContext {
+    PointerGestureState state = PointerGestureState::IDLE;
+    int32_t startScreenX = 0;
+    int32_t startScreenY = 0;
+    int32_t lastScreenX = 0;
+    int32_t lastScreenY = 0;
+    int32_t localX = 0;
+    int32_t localY = 0;
+    uint32_t downTimeMs = 0;
+    uint32_t lastTapTimeMs = 0;
+    int32_t lastTapScreenX = 0;
+    int32_t lastTapScreenY = 0;
+    struct wl_event_source* holdTimerSource = nullptr;
+    WaylandSurface* targetSurface = nullptr;
+    wl_resource* targetSurfaceResource = nullptr;
+};
+
 struct SeatManager::Impl {
     wl_display* display = nullptr;
     wl_event_loop* eventLoop = nullptr;
@@ -97,8 +122,41 @@ struct SeatManager::Impl {
     int32_t pointerScreenY = 0;
     bool pointerModified = false;
 
+    PointerGestureContext gesture;
+
     int keymapFd = -1;
     size_t keymapSize = 0;
+
+    void handleHoldTimeout() {
+        if (gesture.state != PointerGestureState::PENDING_DECISION) {
+            return;
+        }
+        gesture.state = PointerGestureState::HOLD_TRIGGERED;
+
+        if (!gesture.targetSurfaceResource || !display) {
+            return;
+        }
+
+        struct wl_client* targetClient = wl_resource_get_client(gesture.targetSurfaceResource);
+        uint32_t serial = wl_display_next_serial(display);
+
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        uint32_t timeMs = static_cast<uint32_t>(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+
+        for (wl_resource* ptr : pointerResources) {
+            if (wl_resource_get_client(ptr) == targetClient) {
+                wl_pointer_send_motion(ptr, timeMs,
+                                       wl_fixed_from_int(gesture.localX),
+                                       wl_fixed_from_int(gesture.localY));
+                wl_pointer_send_button(ptr, serial, timeMs, BTN_RIGHT, WL_POINTER_BUTTON_STATE_PRESSED);
+                wl_pointer_send_button(ptr, serial, timeMs, BTN_RIGHT, WL_POINTER_BUTTON_STATE_RELEASED);
+                wl_pointer_send_frame(ptr);
+            }
+        }
+        ALOGI("Gesture: HOLD triggered -> sent BTN_RIGHT click to surface at (%d, %d)",
+              gesture.localX, gesture.localY);
+    }
 
     void prepareKeymap() {
         if (keymapFd >= 0) return;
@@ -168,6 +226,7 @@ static void seat_get_pointer(wl_client* client, wl_resource* resource, uint32_t 
         if (s) s->removeResource(r);
     });
     if (seat) seat->addPointerResource(ptr);
+    ALOGI("Seat: Client %p requested wl_pointer (id: %u)", client, id);
 }
 
 static void seat_get_keyboard(wl_client* client, wl_resource* resource, uint32_t id) {
@@ -195,6 +254,7 @@ static void seat_get_keyboard(wl_client* client, wl_resource* resource, uint32_t
     if (wl_resource_get_version(kbd) >= WL_KEYBOARD_REPEAT_INFO_SINCE_VERSION) {
         wl_keyboard_send_repeat_info(kbd, 33, 500); // 33Hz repeat, 500ms delay
     }
+    ALOGI("Seat: Client %p requested wl_keyboard (id: %u)", client, id);
 }
 
 static void seat_get_touch(wl_client* client, wl_resource* resource, uint32_t id) {
@@ -210,6 +270,7 @@ static void seat_get_touch(wl_client* client, wl_resource* resource, uint32_t id
         if (s) s->removeResource(r);
     });
     if (seat) seat->addTouchResource(touch);
+    ALOGI("Seat: Client %p requested wl_touch (id: %u)", client, id);
 }
 
 static void seat_release(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
@@ -240,6 +301,15 @@ bool SeatManager::start(wl_display* display, wl_event_loop* loop, std::shared_pt
     mImpl->bridge = bridge;
 
     mImpl->prepareKeymap();
+
+    mImpl->gesture.holdTimerSource = wl_event_loop_add_timer(
+        mImpl->eventLoop,
+        [](void* data) -> int {
+            auto* impl = static_cast<SeatManager::Impl*>(data);
+            impl->handleHoldTimeout();
+            return 0;
+        },
+        mImpl.get());
 
     DIR* dir = opendir("/dev/input");
     if (!dir) {
@@ -330,6 +400,10 @@ void SeatManager::run() {
 
 void SeatManager::stop() {
     mRunning = false;
+    if (mImpl->gesture.holdTimerSource) {
+        wl_event_source_remove(mImpl->gesture.holdTimerSource);
+        mImpl->gesture.holdTimerSource = nullptr;
+    }
     for (auto& dev : mImpl->devices) {
         if (dev.source) {
             wl_event_source_remove(dev.source);
@@ -395,6 +469,14 @@ void SeatManager::removeResource(wl_resource* resource) {
 
     if (mImpl->currentKeyboardSurface == resource) mImpl->currentKeyboardSurface = nullptr;
     if (mImpl->currentPointerSurface == resource) mImpl->currentPointerSurface = nullptr;
+    if (mImpl->gesture.targetSurfaceResource == resource) {
+        if (mImpl->gesture.holdTimerSource) {
+            wl_event_source_timer_update(mImpl->gesture.holdTimerSource, 0);
+        }
+        mImpl->gesture.state = PointerGestureState::IDLE;
+        mImpl->gesture.targetSurface = nullptr;
+        mImpl->gesture.targetSurfaceResource = nullptr;
+    }
 }
 
 int SeatManager::getKeymapFd() const {
@@ -420,6 +502,14 @@ std::shared_ptr<SurfaceBridge> SeatManager::getBridge() const {
 void SeatManager::notifySurfaceDestroyed(wl_resource* surfaceResource) {
     if (mImpl->currentKeyboardSurface == surfaceResource) mImpl->currentKeyboardSurface = nullptr;
     if (mImpl->currentPointerSurface == surfaceResource) mImpl->currentPointerSurface = nullptr;
+    if (mImpl->gesture.targetSurfaceResource == surfaceResource) {
+        if (mImpl->gesture.holdTimerSource) {
+            wl_event_source_timer_update(mImpl->gesture.holdTimerSource, 0);
+        }
+        mImpl->gesture.state = PointerGestureState::IDLE;
+        mImpl->gesture.targetSurface = nullptr;
+        mImpl->gesture.targetSurfaceResource = nullptr;
+    }
 
     for (int s = 0; s < Impl::MAX_TOUCH_SLOTS; ++s) {
         if (mImpl->touchSlots[s].targetSurfaceResource == surfaceResource) {
@@ -490,6 +580,23 @@ void SeatManager::setPointerFocus(wl_resource* surfaceResource) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Event Parsing & Dispatching
 // ─────────────────────────────────────────────────────────────────────────────
+static bool isNonTouchApp(const WaylandSurface* surf) {
+    if (!surf) return false;
+    std::string id = surf->appId;
+    std::transform(id.begin(), id.end(), id.begin(), ::tolower);
+    if (id.find("foot") != std::string::npos ||
+        id.find("terminal") != std::string::npos ||
+        id.find("alacritty") != std::string::npos ||
+        id.find("kitty") != std::string::npos ||
+        id.find("wezterm") != std::string::npos ||
+        id.find("xterm") != std::string::npos ||
+        id.find("st") != std::string::npos ||
+        id.find("xwayland") != std::string::npos) {
+        return true;
+    }
+    return false;
+}
+
 int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
     if (!(mask & WL_EVENT_READABLE)) return 0;
 
@@ -640,39 +747,93 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                             for (wl_resource* touch : mImpl->touchResources) {
                                 if (wl_resource_get_client(touch) == targetClient) {
                                     hasTouchResource = true;
-                                    wl_touch_send_down(touch, serial, timeMs, surf->resource, s,
-                                                       wl_fixed_from_int(localX), wl_fixed_from_int(localY));
-                                    wl_touch_send_frame(touch);
+                                    break;
                                 }
                             }
 
-                            // Pointer emulation for slot 0 ONLY if client has NO touch interface
-                            if (s == 0 && !hasTouchResource) {
-                                for (wl_resource* ptr : mImpl->pointerResources) {
-                                    if (wl_resource_get_client(ptr) == targetClient) {
-                                        if (mImpl->currentPointerSurface != surf->resource) {
-                                            if (mImpl->currentPointerSurface) {
-                                                for (wl_resource* oldPtr : mImpl->pointerResources) {
-                                                    if (wl_resource_get_client(oldPtr) == wl_resource_get_client(mImpl->currentPointerSurface)) {
-                                                        wl_pointer_send_leave(oldPtr, serial, mImpl->currentPointerSurface);
-                                                        wl_pointer_send_frame(oldPtr);
-                                                    }
-                                                }
-                                            }
-                                            mImpl->currentPointerSurface = surf->resource;
-                                            wl_pointer_send_enter(ptr, serial, surf->resource,
-                                                                  wl_fixed_from_int(localX), wl_fixed_from_int(localY));
-                                        } else {
-                                            wl_pointer_send_motion(ptr, timeMs,
-                                                                   wl_fixed_from_int(localX), wl_fixed_from_int(localY));
-                                        }
-                                        wl_pointer_send_button(ptr, serial, timeMs, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
-                                        wl_pointer_send_frame(ptr);
+                            bool isNativeTouch = hasTouchResource && !isNonTouchApp(surf);
+                            if (isNativeTouch) {
+                                for (wl_resource* touch : mImpl->touchResources) {
+                                    if (wl_resource_get_client(touch) == targetClient) {
+                                        wl_touch_send_down(touch, serial, timeMs, surf->resource, s,
+                                                           wl_fixed_from_int(localX), wl_fixed_from_int(localY));
+                                        wl_touch_send_frame(touch);
                                     }
                                 }
                             }
-                            ALOGI("Touch DOWN on surface %u at screen (%d, %d) -> local (%d, %d)",
-                                  surf->id, slot.screenX, slot.screenY, localX, localY);
+
+                            // Pointer emulation & gesture handling for slot 0 for non-touch apps
+                            if (s == 0 && !isNativeTouch) {
+                                if (mImpl->currentPointerSurface != surf->resource) {
+                                    if (mImpl->currentPointerSurface) {
+                                        for (wl_resource* oldPtr : mImpl->pointerResources) {
+                                            if (wl_resource_get_client(oldPtr) == wl_resource_get_client(mImpl->currentPointerSurface)) {
+                                                wl_pointer_send_leave(oldPtr, serial, mImpl->currentPointerSurface);
+                                                wl_pointer_send_frame(oldPtr);
+                                            }
+                                        }
+                                    }
+                                    mImpl->currentPointerSurface = surf->resource;
+                                    for (wl_resource* ptr : mImpl->pointerResources) {
+                                        if (wl_resource_get_client(ptr) == targetClient) {
+                                            wl_pointer_send_enter(ptr, serial, surf->resource,
+                                                                  wl_fixed_from_int(localX), wl_fixed_from_int(localY));
+                                            wl_pointer_send_frame(ptr);
+                                        }
+                                    }
+                                } else {
+                                    for (wl_resource* ptr : mImpl->pointerResources) {
+                                        if (wl_resource_get_client(ptr) == targetClient) {
+                                            wl_pointer_send_motion(ptr, timeMs,
+                                                                   wl_fixed_from_int(localX), wl_fixed_from_int(localY));
+                                            wl_pointer_send_frame(ptr);
+                                        }
+                                    }
+                                }
+
+                                mImpl->pointerScreenX = slot.screenX;
+                                mImpl->pointerScreenY = slot.screenY;
+
+                                // Check for double-tap
+                                int32_t tapDx = slot.screenX - mImpl->gesture.lastTapScreenX;
+                                int32_t tapDy = slot.screenY - mImpl->gesture.lastTapScreenY;
+                                bool isDoubleTap = (timeMs - mImpl->gesture.lastTapTimeMs < 300) &&
+                                                   ((tapDx * tapDx + tapDy * tapDy) < 25 * 25);
+
+                                mImpl->gesture.startScreenX = slot.screenX;
+                                mImpl->gesture.startScreenY = slot.screenY;
+                                mImpl->gesture.lastScreenX  = slot.screenX;
+                                mImpl->gesture.lastScreenY  = slot.screenY;
+                                mImpl->gesture.localX       = localX;
+                                mImpl->gesture.localY       = localY;
+                                mImpl->gesture.downTimeMs   = timeMs;
+                                mImpl->gesture.targetSurface = surf;
+                                mImpl->gesture.targetSurfaceResource = surf->resource;
+
+                                if (isDoubleTap) {
+                                    if (mImpl->gesture.holdTimerSource) {
+                                        wl_event_source_timer_update(mImpl->gesture.holdTimerSource, 0);
+                                    }
+                                    mImpl->gesture.state = PointerGestureState::DRAGGING_SELECTION;
+                                    mImpl->gesture.lastTapTimeMs = 0; // consumed
+
+                                    for (wl_resource* ptr : mImpl->pointerResources) {
+                                        if (wl_resource_get_client(ptr) == targetClient) {
+                                            wl_pointer_send_button(ptr, serial, timeMs, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+                                            wl_pointer_send_frame(ptr);
+                                        }
+                                    }
+                                    ALOGI("Gesture: Double-tap detected -> BTN_LEFT PRESSED for drag selection / double-click");
+                                } else {
+                                    mImpl->gesture.state = PointerGestureState::PENDING_DECISION;
+                                    if (mImpl->gesture.holdTimerSource) {
+                                        wl_event_source_timer_update(mImpl->gesture.holdTimerSource, 450);
+                                    }
+                                    ALOGI("Gesture: Touch DOWN -> PENDING_DECISION (timer 450ms armed)");
+                                }
+                            }
+                            ALOGI("Touch DOWN on surface %u (client %p, hasTouch=%d) at screen (%d, %d) -> local (%d, %d)",
+                                  surf->id, targetClient, hasTouchResource, slot.screenX, slot.screenY, localX, localY);
                         } else {
                             ALOGI("Touch DOWN at screen (%d, %d) outside any window", slot.screenX, slot.screenY);
                         }
@@ -697,18 +858,68 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                             for (wl_resource* touch : mImpl->touchResources) {
                                 if (wl_resource_get_client(touch) == targetClient) {
                                     hasTouchResource = true;
-                                    wl_touch_send_motion(touch, timeMs, s,
-                                                         wl_fixed_from_int(localX), wl_fixed_from_int(localY));
-                                    wl_touch_send_frame(touch);
+                                    break;
                                 }
                             }
 
-                            if (s == 0 && !hasTouchResource) {
-                                for (wl_resource* ptr : mImpl->pointerResources) {
-                                    if (wl_resource_get_client(ptr) == targetClient) {
-                                        wl_pointer_send_motion(ptr, timeMs,
-                                                               wl_fixed_from_int(localX), wl_fixed_from_int(localY));
-                                        wl_pointer_send_frame(ptr);
+                            bool isNativeTouch = hasTouchResource && !isNonTouchApp(surf);
+                            if (isNativeTouch) {
+                                for (wl_resource* touch : mImpl->touchResources) {
+                                    if (wl_resource_get_client(touch) == targetClient) {
+                                        wl_touch_send_motion(touch, timeMs, s,
+                                                             wl_fixed_from_int(localX), wl_fixed_from_int(localY));
+                                        wl_touch_send_frame(touch);
+                                    }
+                                }
+                            }
+
+                            if (s == 0 && !isNativeTouch) {
+                                mImpl->gesture.localX = localX;
+                                mImpl->gesture.localY = localY;
+                                mImpl->pointerScreenX = slot.screenX;
+                                mImpl->pointerScreenY = slot.screenY;
+
+                                if (mImpl->gesture.state == PointerGestureState::PENDING_DECISION) {
+                                    int32_t dx = slot.screenX - mImpl->gesture.startScreenX;
+                                    int32_t dy = slot.screenY - mImpl->gesture.startScreenY;
+                                    if ((dx * dx + dy * dy) >= 10 * 10) {
+                                        if (mImpl->gesture.holdTimerSource) {
+                                            wl_event_source_timer_update(mImpl->gesture.holdTimerSource, 0);
+                                        }
+                                        mImpl->gesture.state = PointerGestureState::SCROLLING;
+                                        mImpl->gesture.lastScreenX = slot.screenX;
+                                        mImpl->gesture.lastScreenY = slot.screenY;
+                                        ALOGI("Gesture: Displaced >= 10px -> entered SCROLLING");
+                                    }
+                                }
+
+                                if (mImpl->gesture.state == PointerGestureState::SCROLLING) {
+                                    int32_t deltaX = slot.screenX - mImpl->gesture.lastScreenX;
+                                    int32_t deltaY = slot.screenY - mImpl->gesture.lastScreenY;
+                                    mImpl->gesture.lastScreenX = slot.screenX;
+                                    mImpl->gesture.lastScreenY = slot.screenY;
+
+                                    for (wl_resource* ptr : mImpl->pointerResources) {
+                                        if (wl_resource_get_client(ptr) == targetClient) {
+                                            if (deltaY != 0) {
+                                                // Natural scrolling: finger moves UP (deltaY < 0) -> scroll down (+value)
+                                                wl_fixed_t scrollValY = wl_fixed_from_double(-deltaY * 1.5);
+                                                wl_pointer_send_axis(ptr, timeMs, WL_POINTER_AXIS_VERTICAL_SCROLL, scrollValY);
+                                            }
+                                            if (deltaX != 0) {
+                                                wl_fixed_t scrollValX = wl_fixed_from_double(-deltaX * 1.5);
+                                                wl_pointer_send_axis(ptr, timeMs, WL_POINTER_AXIS_HORIZONTAL_SCROLL, scrollValX);
+                                            }
+                                            wl_pointer_send_frame(ptr);
+                                        }
+                                    }
+                                } else if (mImpl->gesture.state == PointerGestureState::DRAGGING_SELECTION) {
+                                    for (wl_resource* ptr : mImpl->pointerResources) {
+                                        if (wl_resource_get_client(ptr) == targetClient) {
+                                            wl_pointer_send_motion(ptr, timeMs,
+                                                                   wl_fixed_from_int(localX), wl_fixed_from_int(localY));
+                                            wl_pointer_send_frame(ptr);
+                                        }
                                     }
                                 }
                             }
@@ -728,18 +939,63 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                             for (wl_resource* touch : mImpl->touchResources) {
                                 if (wl_resource_get_client(touch) == targetClient) {
                                     hasTouchResource = true;
-                                    wl_touch_send_up(touch, serial, timeMs, s);
-                                    wl_touch_send_frame(touch);
+                                    break;
                                 }
                             }
 
-                            if (s == 0 && !hasTouchResource) {
-                                for (wl_resource* ptr : mImpl->pointerResources) {
-                                    if (wl_resource_get_client(ptr) == targetClient) {
-                                        wl_pointer_send_button(ptr, serial, timeMs, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
-                                        wl_pointer_send_frame(ptr);
+                            bool isNativeTouch = hasTouchResource && !isNonTouchApp(slot.targetSurface);
+                            if (isNativeTouch) {
+                                for (wl_resource* touch : mImpl->touchResources) {
+                                    if (wl_resource_get_client(touch) == targetClient) {
+                                        wl_touch_send_up(touch, serial, timeMs, s);
+                                        wl_touch_send_frame(touch);
                                     }
                                 }
+                            }
+
+                            if (s == 0 && !isNativeTouch) {
+                                if (mImpl->gesture.holdTimerSource) {
+                                    wl_event_source_timer_update(mImpl->gesture.holdTimerSource, 0);
+                                }
+
+                                if (mImpl->gesture.state == PointerGestureState::PENDING_DECISION) {
+                                    uint32_t duration = timeMs - mImpl->gesture.downTimeMs;
+                                    int32_t dx = slot.screenX - mImpl->gesture.startScreenX;
+                                    int32_t dy = slot.screenY - mImpl->gesture.startScreenY;
+                                    if (duration < 450 && (dx * dx + dy * dy < 15 * 15)) {
+                                        for (wl_resource* ptr : mImpl->pointerResources) {
+                                            if (wl_resource_get_client(ptr) == targetClient) {
+                                                wl_pointer_send_motion(ptr, timeMs,
+                                                                       wl_fixed_from_int(mImpl->gesture.localX),
+                                                                       wl_fixed_from_int(mImpl->gesture.localY));
+                                                wl_pointer_send_button(ptr, serial, timeMs, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+                                                wl_pointer_send_button(ptr, serial, timeMs, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+                                                wl_pointer_send_frame(ptr);
+                                            }
+                                        }
+                                        mImpl->gesture.lastTapTimeMs = timeMs;
+                                        mImpl->gesture.lastTapScreenX = mImpl->gesture.startScreenX;
+                                        mImpl->gesture.lastTapScreenY = mImpl->gesture.startScreenY;
+                                        ALOGI("Gesture: TAP detected -> sent BTN_LEFT click to client %p at (%d, %d)",
+                                              targetClient, mImpl->gesture.localX, mImpl->gesture.localY);
+                                    }
+                                } else if (mImpl->gesture.state == PointerGestureState::DRAGGING_SELECTION) {
+                                    for (wl_resource* ptr : mImpl->pointerResources) {
+                                        if (wl_resource_get_client(ptr) == targetClient) {
+                                            wl_pointer_send_button(ptr, serial, timeMs, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+                                            wl_pointer_send_frame(ptr);
+                                        }
+                                    }
+                                    ALOGI("Gesture: DRAGGING_SELECTION ended -> released BTN_LEFT");
+                                } else if (mImpl->gesture.state == PointerGestureState::SCROLLING) {
+                                    ALOGI("Gesture: SCROLLING ended");
+                                } else if (mImpl->gesture.state == PointerGestureState::HOLD_TRIGGERED) {
+                                    ALOGI("Gesture: HOLD ended");
+                                }
+
+                                mImpl->gesture.state = PointerGestureState::IDLE;
+                                mImpl->gesture.targetSurface = nullptr;
+                                mImpl->gesture.targetSurfaceResource = nullptr;
                             }
                             ALOGI("Touch UP for slot %d", s);
                         }
