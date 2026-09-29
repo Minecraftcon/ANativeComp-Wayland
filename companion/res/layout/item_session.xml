@@ -3,20 +3,21 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:background="@drawable/card_session_bg"
-    android:paddingStart="16dp"
-    android:paddingEnd="16dp"
-    android:paddingTop="12dp"
-    android:paddingBottom="12dp"
-    android:layout_marginBottom="10dp">
+    android:background="@color/bg_main"
+    android:paddingStart="20dp"
+    android:paddingEnd="20dp"
+    android:paddingTop="16dp"
+    android:paddingBottom="16dp"
+    android:layout_marginBottom="0dp">
 
-    <!-- Top Row: App Name & PID -->
+    <!-- App name + PID row -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="4dp">
+        android:paddingTop="14dp"
+        android:layout_marginBottom="3dp">
 
         <TextView
             android:id="@+id/tv_session_app_id"
@@ -25,50 +26,52 @@
             android:layout_weight="1"
             android:text="thunar"
             android:textColor="@color/text_primary"
-            android:textSize="14sp"
-            android:textStyle="bold" />
+            android:textSize="13sp" />
 
         <TextView
             android:id="@+id/tv_session_pid"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="PID 14450"
+            android:text="14450"
             android:textColor="@color/text_muted"
             android:textSize="11sp"
             android:fontFamily="monospace" />
+
     </LinearLayout>
 
+    <!-- Window title -->
     <TextView
         android:id="@+id/tv_session_title"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="File Manager"
-        android:textColor="@color/text_secondary"
-        android:textSize="12sp"
-        android:layout_marginBottom="8dp" />
+        android:textColor="@color/text_muted"
+        android:textSize="11sp"
+        android:layout_marginBottom="10dp" />
 
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:background="@color/divider"
-        android:layout_marginBottom="8dp" />
-
-    <!-- Metrics Row -->
+    <!-- Metrics row: RAM · runtime · mode badge -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
+        android:gravity="center_vertical"
         android:layout_marginBottom="10dp">
 
         <TextView
             android:id="@+id/tv_session_ram"
-            android:layout_width="0dp"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
             android:text="28.4 MB"
-            android:textColor="@color/text_primary"
-            android:textSize="12sp"
+            android:textColor="@color/text_secondary"
+            android:textSize="11sp"
             android:fontFamily="monospace" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="  ·  "
+            android:textColor="@color/text_muted"
+            android:textSize="11sp" />
 
         <TextView
             android:id="@+id/tv_session_runtime"
@@ -77,46 +80,74 @@
             android:layout_weight="1"
             android:text="14m 22s"
             android:textColor="@color/text_secondary"
-            android:textSize="12sp"
+            android:textSize="11sp"
             android:fontFamily="monospace" />
 
+        <!-- Mode badge -->
         <TextView
             android:id="@+id/tv_session_mode"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Touch"
-            android:textColor="@color/status_green"
-            android:textSize="12sp" />
+            android:textColor="@color/mode_native_text"
+            android:textSize="10sp"
+            android:background="@drawable/mode_badge_native"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="3dp"
+            android:paddingBottom="3dp" />
+
     </LinearLayout>
 
-    <!-- Action Buttons -->
+    <!-- Action row: icon-only buttons right-aligned -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
+        android:orientation="horizontal"
+        android:gravity="end"
+        android:layout_marginBottom="14dp">
 
-        <Button
+        <!-- Focus icon button -->
+        <LinearLayout
             android:id="@+id/btn_session_focus"
-            android:layout_width="0dp"
-            android:layout_height="32dp"
-            android:layout_weight="1"
-            android:layout_marginEnd="6dp"
-            android:text="Focus"
-            android:textColor="@color/text_primary"
-            android:textSize="11sp"
-            android:background="@drawable/button_accent"
-            android:minHeight="0dp" />
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true"
+            android:layout_marginEnd="4dp">
 
-        <Button
+            <ImageView
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:src="@drawable/ic_scan"
+                android:tint="@color/icon_default" />
+
+        </LinearLayout>
+
+        <!-- Kill icon button -->
+        <LinearLayout
             android:id="@+id/btn_session_kill"
-            android:layout_width="0dp"
-            android:layout_height="32dp"
-            android:layout_weight="1"
-            android:text="Close"
-            android:textColor="@color/status_red"
-            android:textSize="11sp"
-            android:background="@drawable/button_danger"
-            android:minHeight="0dp" />
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true">
+
+            <ImageView
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:src="@drawable/ic_x"
+                android:tint="@color/status_red" />
+
+        </LinearLayout>
+
     </LinearLayout>
+
+    <!-- Bottom hairline divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
 
 </LinearLayout>

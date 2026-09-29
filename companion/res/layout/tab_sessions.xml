@@ -6,42 +6,53 @@
     android:background="@color/bg_main"
     android:paddingStart="20dp"
     android:paddingEnd="20dp"
-    android:paddingTop="16dp"
+    android:paddingTop="20dp"
     android:paddingBottom="24dp">
 
-    <!-- Header info -->
+    <!-- Header: client count + icon-only refresh -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="12dp">
+        android:layout_marginBottom="16dp">
 
         <TextView
+            android:id="@+id/tv_sessions_count"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="CONNECTED CLIENTS"
+            android:text="No clients"
             android:textColor="@color/text_muted"
-            android:textSize="11sp"
-            android:letterSpacing="0.08"
-            android:textStyle="bold" />
+            android:textSize="12sp" />
 
-        <Button
+        <!-- Icon-only refresh button -->
+        <LinearLayout
             android:id="@+id/btn_sessions_refresh"
-            android:layout_width="wrap_content"
-            android:layout_height="30dp"
-            android:text="Refresh"
-            android:textSize="11sp"
-            android:textColor="@color/text_primary"
-            android:background="@drawable/button_accent"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:minHeight="0dp"
-            android:minWidth="0dp" />
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true">
+
+            <ImageView
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:src="@drawable/ic_refresh"
+                android:tint="@color/icon_default" />
+
+        </LinearLayout>
+
     </LinearLayout>
 
-    <!-- Client Sessions Scroll List -->
+    <!-- Hairline divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider"
+        android:layout_marginBottom="0dp" />
+
+    <!-- Session list -->
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -54,14 +65,21 @@
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
-            <!-- Empty State Container -->
+            <!-- Empty State -->
             <LinearLayout
                 android:id="@+id/ll_sessions_empty"
                 android:layout_width="match_parent"
-                android:layout_height="180dp"
+                android:layout_height="200dp"
                 android:gravity="center"
                 android:orientation="vertical"
                 android:visibility="gone">
+
+                <ImageView
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:src="@drawable/ic_users"
+                    android:tint="@color/text_muted"
+                    android:layout_marginBottom="10dp" />
 
                 <TextView
                     android:layout_width="wrap_content"
@@ -74,13 +92,14 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:text="Launch an app from the Logs &amp; Tools tab."
+                    android:text="Launch an app from the Logs tab."
                     android:textColor="@color/text_muted"
                     android:textSize="11sp"
                     android:gravity="center" />
+
             </LinearLayout>
 
-            <!-- Dynamic Session Items Container -->
+            <!-- Dynamic session items -->
             <LinearLayout
                 android:id="@+id/ll_sessions_list"
                 android:layout_width="match_parent"

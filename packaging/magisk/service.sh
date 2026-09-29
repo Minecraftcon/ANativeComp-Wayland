@@ -26,7 +26,7 @@ export XDG_RUNTIME_DIR=/data/wayland
 export WAYLAND_DISPLAY=wayland-0
 export LD_LIBRARY_PATH=/system/lib64
 
-exec /system/bin/andwayland --socket wayland-0 >> "$LOG" 2>&1 &
+/system/bin/andwayland --socket wayland-0 >> "$LOG" 2>&1 &
 PID=$!
 echo "ANativeDrawer started (pid $PID)" >> "$LOG"
 

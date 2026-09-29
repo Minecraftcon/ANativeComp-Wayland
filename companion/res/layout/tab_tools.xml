@@ -6,124 +6,193 @@
     android:background="@color/bg_main"
     android:paddingStart="20dp"
     android:paddingEnd="20dp"
-    android:paddingTop="16dp"
+    android:paddingTop="20dp"
     android:paddingBottom="24dp">
 
-    <!-- Quick Launch Section -->
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="QUICK LAUNCH"
-        android:textColor="@color/text_muted"
-        android:textSize="11sp"
-        android:letterSpacing="0.08"
-        android:textStyle="bold"
-        android:layout_marginBottom="10dp" />
-
+    <!-- Quick launch: icon tiles, no eyebrow -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:layout_marginBottom="20dp">
+        android:layout_marginBottom="24dp">
 
-        <Button
+        <!-- foot tile -->
+        <LinearLayout
             android:id="@+id/btn_launch_foot"
             android:layout_width="0dp"
-            android:layout_height="36dp"
+            android:layout_height="68dp"
             android:layout_weight="1"
-            android:layout_marginEnd="6dp"
-            android:text="foot"
-            android:textColor="@color/text_primary"
-            android:textSize="12sp"
-            android:background="@drawable/button_accent"
-            android:minHeight="0dp" />
+            android:layout_marginEnd="8dp"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:background="@drawable/launch_tile_bg"
+            android:clickable="true"
+            android:focusable="true">
 
-        <Button
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_terminal"
+                android:tint="@color/icon_default"
+                android:layout_marginBottom="5dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="foot"
+                android:textColor="@color/text_muted"
+                android:textSize="10sp"
+                android:fontFamily="monospace" />
+
+        </LinearLayout>
+
+        <!-- Thunar tile -->
+        <LinearLayout
             android:id="@+id/btn_launch_thunar"
             android:layout_width="0dp"
-            android:layout_height="36dp"
+            android:layout_height="68dp"
             android:layout_weight="1"
-            android:layout_marginEnd="6dp"
-            android:text="Thunar"
-            android:textColor="@color/text_primary"
-            android:textSize="12sp"
-            android:background="@drawable/button_accent"
-            android:minHeight="0dp" />
+            android:layout_marginEnd="8dp"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:background="@drawable/launch_tile_bg"
+            android:clickable="true"
+            android:focusable="true">
 
-        <Button
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_folder"
+                android:tint="@color/icon_default"
+                android:layout_marginBottom="5dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="files"
+                android:textColor="@color/text_muted"
+                android:textSize="10sp"
+                android:fontFamily="monospace" />
+
+        </LinearLayout>
+
+        <!-- galculator tile -->
+        <LinearLayout
             android:id="@+id/btn_launch_galculator"
             android:layout_width="0dp"
-            android:layout_height="36dp"
+            android:layout_height="68dp"
             android:layout_weight="1"
-            android:text="galculator"
-            android:textColor="@color/text_primary"
-            android:textSize="12sp"
-            android:background="@drawable/button_accent"
-            android:minHeight="0dp" />
+            android:orientation="vertical"
+            android:gravity="center"
+            android:background="@drawable/launch_tile_bg"
+            android:clickable="true"
+            android:focusable="true">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_calculator"
+                android:tint="@color/icon_default"
+                android:layout_marginBottom="5dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="calc"
+                android:textColor="@color/text_muted"
+                android:textSize="10sp"
+                android:fontFamily="monospace" />
+
+        </LinearLayout>
+
     </LinearLayout>
 
-    <!-- Logs Section -->
+    <!-- Hairline divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider"
+        android:layout_marginBottom="0dp" />
+
+    <!-- Log header: muted label + icon buttons -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="10dp">
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp">
 
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="LOG STREAM"
+            android:text="System logs"
             android:textColor="@color/text_muted"
-            android:textSize="11sp"
-            android:letterSpacing="0.08"
-            android:textStyle="bold" />
+            android:textSize="11sp" />
 
-        <Button
+        <!-- Copy icon button -->
+        <LinearLayout
             android:id="@+id/btn_log_copy"
-            android:layout_width="wrap_content"
-            android:layout_height="28dp"
-            android:text="Copy"
-            android:textSize="11sp"
-            android:textColor="@color/text_primary"
-            android:background="@drawable/button_accent"
-            android:layout_marginEnd="6dp"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp"
-            android:minHeight="0dp"
-            android:minWidth="0dp" />
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true"
+            android:layout_marginEnd="2dp">
 
-        <Button
+            <ImageView
+                android:layout_width="17dp"
+                android:layout_height="17dp"
+                android:src="@drawable/ic_copy"
+                android:tint="@color/icon_default" />
+
+        </LinearLayout>
+
+        <!-- Clear icon button -->
+        <LinearLayout
             android:id="@+id/btn_log_clear"
-            android:layout_width="wrap_content"
-            android:layout_height="28dp"
-            android:text="Clear"
-            android:textSize="11sp"
-            android:textColor="@color/text_muted"
-            android:background="@drawable/button_accent"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp"
-            android:minHeight="0dp"
-            android:minWidth="0dp" />
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true">
+
+            <ImageView
+                android:layout_width="17dp"
+                android:layout_height="17dp"
+                android:src="@drawable/ic_trash"
+                android:tint="@color/icon_default" />
+
+        </LinearLayout>
+
     </LinearLayout>
 
+    <!-- Hairline divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider"
+        android:layout_marginBottom="0dp" />
+
+    <!-- Log content -->
     <ScrollView
         android:id="@+id/sv_log_container"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:background="@drawable/card_background"
-        android:padding="12dp">
+        android:paddingTop="10dp">
 
         <TextView
             android:id="@+id/tv_log_content"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="[ANativeDrawer] Monitoring started...\n[andwayland] Listening on socket: /data/wayland/wayland-0"
-            android:textColor="@color/text_secondary"
-            android:textSize="11sp"
-            android:fontFamily="monospace" />
+            android:text="[ANativeDrawer] Monitoring started…"
+            android:textColor="@color/text_muted"
+            android:textSize="10sp"
+            android:fontFamily="monospace"
+            android:lineSpacingMultiplier="1.4" />
+
     </ScrollView>
 
 </LinearLayout>

@@ -32,12 +32,12 @@ echo "Copying companion APK to system/priv-app/..."
 cp -f "$REPO_ROOT/companion/build/ANativeDrawer.apk" "$MAGISK_DIR/system/priv-app/ANativeDrawer/ANativeDrawer.apk"
 chmod 644 "$MAGISK_DIR/system/priv-app/ANativeDrawer/ANativeDrawer.apk"
 
-chmod 755 "$MAGISK_DIR/service.sh"
+chmod 755 "$MAGISK_DIR/service.sh" "$MAGISK_DIR/customize.sh"
 
 # 3. Create zip package
 rm -f "$OUT_ZIP"
 echo "Creating flashable Magisk zip..."
-(cd "$MAGISK_DIR" && zip -r -9 "$OUT_ZIP" module.prop service.sh system)
+(cd "$MAGISK_DIR" && zip -r -9 "$OUT_ZIP" module.prop service.sh customize.sh system)
 
 echo "=== Magisk Module Packaged: $OUT_ZIP ==="
 unzip -l "$OUT_ZIP"

@@ -6,327 +6,317 @@
     android:background="@color/bg_main"
     android:paddingStart="20dp"
     android:paddingEnd="20dp"
-    android:paddingTop="16dp"
-    android:paddingBottom="24dp">
+    android:paddingTop="20dp"
+    android:paddingBottom="32dp">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
-        <!-- Section: Input & Gestures -->
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="INPUT &amp; GESTURES"
-            android:textColor="@color/text_muted"
-            android:textSize="11sp"
-            android:letterSpacing="0.08"
-            android:textStyle="bold"
-            android:layout_marginBottom="10dp" />
-
+        <!-- Long press delay -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:background="@drawable/card_background"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp"
-            android:paddingTop="14dp"
-            android:paddingBottom="14dp"
-            android:layout_marginBottom="20dp">
-
-            <!-- Hold Threshold Slider -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Long press delay"
-                    android:textColor="@color/text_primary"
-                    android:textSize="13sp" />
-
-                <TextView
-                    android:id="@+id/tv_pref_hold_val"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="450 ms"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp"
-                    android:fontFamily="monospace" />
-            </LinearLayout>
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingTop="4dp"
+            android:paddingBottom="2dp">
 
             <TextView
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="Hold time before right-click in non-touch apps"
-                android:textColor="@color/text_muted"
-                android:textSize="11sp"
-                android:layout_marginTop="2dp"
-                android:layout_marginBottom="6dp" />
-
-            <SeekBar
-                android:id="@+id/sb_pref_hold"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:max="800"
-                android:progress="250"
-                android:layout_marginBottom="12dp" />
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="@color/divider"
-                android:layout_marginBottom="12dp" />
-
-            <!-- Scroll Sensitivity Slider -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Scroll sensitivity"
-                    android:textColor="@color/text_primary"
-                    android:textSize="13sp" />
-
-                <TextView
-                    android:id="@+id/tv_pref_scroll_val"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="100 %"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp"
-                    android:fontFamily="monospace" />
-            </LinearLayout>
+                android:layout_weight="1"
+                android:text="Long press delay"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
 
             <TextView
+                android:id="@+id/tv_pref_hold_val"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Multiplier for touch drag-to-scroll speed"
+                android:text="450 ms"
                 android:textColor="@color/text_muted"
-                android:textSize="11sp"
-                android:layout_marginTop="2dp"
-                android:layout_marginBottom="6dp" />
-
-            <SeekBar
-                android:id="@+id/sb_pref_scroll"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:max="250"
-                android:progress="50"
-                android:layout_marginBottom="12dp" />
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="@color/divider"
-                android:layout_marginBottom="12dp" />
-
-            <!-- Double-tap Window Slider -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Double-tap interval"
-                    android:textColor="@color/text_primary"
-                    android:textSize="13sp" />
-
-                <TextView
-                    android:id="@+id/tv_pref_doubletap_val"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="250 ms"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="12sp"
-                    android:fontFamily="monospace" />
-            </LinearLayout>
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Max duration between taps for selection drag"
-                android:textColor="@color/text_muted"
-                android:textSize="11sp"
-                android:layout_marginTop="2dp"
-                android:layout_marginBottom="6dp" />
-
-            <SeekBar
-                android:id="@+id/sb_pref_doubletap"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:max="350"
-                android:progress="100"
-                android:layout_marginBottom="12dp" />
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="@color/divider"
-                android:layout_marginBottom="12dp" />
-
-            <!-- Invert Scroll Switch -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Invert scroll"
-                        android:textColor="@color/text_primary"
-                        android:textSize="13sp" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Reverse vertical touch scrolling direction"
-                        android:textColor="@color/text_muted"
-                        android:textSize="11sp" />
-                </LinearLayout>
-
-                <Switch
-                    android:id="@+id/sw_pref_invert_scroll"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content" />
-            </LinearLayout>
+                android:textSize="12sp"
+                android:fontFamily="monospace" />
 
         </LinearLayout>
 
-        <!-- Section: Window & System -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="WINDOW &amp; SYSTEM"
+            android:text="Hold time before right-click in non-touch apps"
             android:textColor="@color/text_muted"
             android:textSize="11sp"
-            android:letterSpacing="0.08"
-            android:textStyle="bold"
-            android:layout_marginBottom="10dp" />
+            android:layout_marginBottom="6dp" />
 
+        <SeekBar
+            android:id="@+id/sb_pref_hold"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="800"
+            android:progress="250"
+            android:layout_marginBottom="16dp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/divider"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Scroll sensitivity -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:background="@drawable/card_background"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp"
-            android:paddingTop="14dp"
-            android:paddingBottom="14dp"
-            android:layout_marginBottom="24dp">
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingBottom="2dp">
 
-            <!-- Force SSD Switch -->
-            <LinearLayout
-                android:layout_width="match_parent"
+            <TextView
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
+                android:layout_weight="1"
+                android:text="Scroll sensitivity"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
 
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Server-side decorations"
-                        android:textColor="@color/text_primary"
-                        android:textSize="13sp" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Draw compositor titlebar with close button"
-                        android:textColor="@color/text_muted"
-                        android:textSize="11sp" />
-                </LinearLayout>
-
-                <Switch
-                    android:id="@+id/sw_pref_ssd"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:checked="true" />
-            </LinearLayout>
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="@color/divider"
-                android:layout_marginTop="12dp"
-                android:layout_marginBottom="12dp" />
-
-            <!-- Resident Notification Switch -->
-            <LinearLayout
-                android:layout_width="match_parent"
+            <TextView
+                android:id="@+id/tv_pref_scroll_val"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Status bar notification"
-                        android:textColor="@color/text_primary"
-                        android:textSize="13sp" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Keep resident status and quick controls"
-                        android:textColor="@color/text_muted"
-                        android:textSize="11sp" />
-                </LinearLayout>
-
-                <Switch
-                    android:id="@+id/sw_pref_notification"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:checked="true" />
-            </LinearLayout>
+                android:text="100 %"
+                android:textColor="@color/text_muted"
+                android:textSize="12sp"
+                android:fontFamily="monospace" />
 
         </LinearLayout>
 
-        <!-- Save Button -->
-        <Button
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Multiplier for touch drag-to-scroll speed"
+            android:textColor="@color/text_muted"
+            android:textSize="11sp"
+            android:layout_marginBottom="6dp" />
+
+        <SeekBar
+            android:id="@+id/sb_pref_scroll"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="250"
+            android:progress="50"
+            android:layout_marginBottom="16dp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/divider"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Double-tap interval -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingBottom="2dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Double-tap interval"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/tv_pref_doubletap_val"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="250 ms"
+                android:textColor="@color/text_muted"
+                android:textSize="12sp"
+                android:fontFamily="monospace" />
+
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Max duration between taps for selection drag"
+            android:textColor="@color/text_muted"
+            android:textSize="11sp"
+            android:layout_marginBottom="6dp" />
+
+        <SeekBar
+            android:id="@+id/sb_pref_doubletap"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="350"
+            android:progress="100"
+            android:layout_marginBottom="16dp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/divider"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Invert scroll -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Invert scroll"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Reverse vertical touch scrolling direction"
+                    android:textColor="@color/text_muted"
+                    android:textSize="11sp" />
+
+            </LinearLayout>
+
+            <Switch
+                android:id="@+id/sw_pref_invert_scroll"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/divider"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Server-side decorations -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Server-side decorations"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Draw compositor titlebar with close button"
+                    android:textColor="@color/text_muted"
+                    android:textSize="11sp" />
+
+            </LinearLayout>
+
+            <Switch
+                android:id="@+id/sw_pref_ssd"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true" />
+
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/divider"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Status bar notification -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Status bar notification"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Keep resident status and quick controls"
+                    android:textColor="@color/text_muted"
+                    android:textSize="11sp" />
+
+            </LinearLayout>
+
+            <Switch
+                android:id="@+id/sw_pref_notification"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true" />
+
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/divider"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="24dp" />
+
+        <!-- Apply button: ghost style -->
+        <LinearLayout
             android:id="@+id/btn_pref_save"
             android:layout_width="match_parent"
-            android:layout_height="40dp"
-            android:text="Apply Changes"
-            android:textColor="@color/text_primary"
-            android:textSize="13sp"
-            android:background="@drawable/button_accent"
-            android:minHeight="0dp" />
+            android:layout_height="44dp"
+            android:gravity="center"
+            android:background="@drawable/button_ghost"
+            android:clickable="true"
+            android:focusable="true">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Apply changes"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+        </LinearLayout>
 
     </LinearLayout>
 </ScrollView>

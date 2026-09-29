@@ -5,7 +5,7 @@
     android:orientation="vertical"
     android:background="@color/bg_main">
 
-    <!-- Clean Header Bar -->
+    <!-- Header: app name + status dot -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="52dp"
@@ -15,132 +15,196 @@
         android:paddingEnd="20dp"
         android:background="@color/bg_main">
 
-        <LinearLayout
+        <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
+            android:text="ANativeDrawer"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp"
+            android:letterSpacing="-0.01" />
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="ANativeDrawer"
-                android:textColor="@color/text_primary"
-                android:textSize="16sp"
-                android:textStyle="bold" />
+        <!-- Status dot — small circle, color set in Java -->
+        <View
+            android:id="@+id/view_status_dot"
+            android:layout_width="7dp"
+            android:layout_height="7dp"
+            android:layout_marginEnd="6dp"
+            android:background="@drawable/status_dot" />
 
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text=" / "
-                android:textColor="@color/text_muted"
-                android:textSize="14sp" />
-
-            <TextView
-                android:id="@+id/tv_header_subtitle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="wayland-0"
-                android:textColor="@color/text_secondary"
-                android:textSize="13sp"
-                android:fontFamily="monospace" />
-        </LinearLayout>
-
-        <!-- Subtle Text Status -->
         <TextView
             android:id="@+id/tv_header_status"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="● Running"
+            android:text="running"
             android:textColor="@color/status_green"
-            android:textSize="12sp"
-            android:paddingStart="6dp"
-            android:paddingEnd="6dp"
-            android:paddingTop="2dp"
-            android:paddingBottom="2dp" />
+            android:textSize="11sp"
+            android:letterSpacing="0.02" />
 
     </LinearLayout>
 
+    <!-- Hairline divider -->
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:background="@color/divider" />
 
-    <!-- Minimalist Tab Bar -->
-    <HorizontalScrollView
+    <!-- Icon + Label Tab Bar -->
+    <LinearLayout
+        android:id="@+id/tab_bar"
         android:layout_width="match_parent"
-        android:layout_height="44dp"
-        android:scrollbars="none"
+        android:layout_height="56dp"
+        android:orientation="horizontal"
         android:background="@color/bg_main">
 
+        <!-- Overview Tab -->
         <LinearLayout
-            android:id="@+id/tab_bar"
-            android:layout_width="wrap_content"
+            android:id="@+id/btn_tab_overview"
+            android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:paddingStart="16dp"
-            android:paddingEnd="16dp">
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true">
 
-            <Button
-                android:id="@+id/btn_tab_overview"
+            <ImageView
+                android:id="@+id/iv_tab_overview"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:src="@drawable/ic_activity"
+                android:tint="@color/icon_active" />
+
+            <TextView
+                android:id="@+id/tv_tab_overview"
                 android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:layout_marginEnd="6dp"
+                android:layout_height="wrap_content"
                 android:text="Overview"
-                android:textSize="12sp"
+                android:textSize="10sp"
                 android:textColor="@color/text_primary"
-                android:background="@drawable/tab_pill_active"
-                android:paddingStart="14dp"
-                android:paddingEnd="14dp"
-                android:minHeight="0dp"
-                android:minWidth="0dp" />
+                android:layout_marginTop="3dp" />
 
-            <Button
-                android:id="@+id/btn_tab_sessions"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:layout_marginEnd="6dp"
-                android:text="Clients"
-                android:textSize="12sp"
-                android:textColor="@color/text_secondary"
-                android:background="@drawable/tab_pill_inactive"
-                android:paddingStart="14dp"
-                android:paddingEnd="14dp"
-                android:minHeight="0dp"
-                android:minWidth="0dp" />
-
-            <Button
-                android:id="@+id/btn_tab_preferences"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:layout_marginEnd="6dp"
-                android:text="Settings"
-                android:textSize="12sp"
-                android:textColor="@color/text_secondary"
-                android:background="@drawable/tab_pill_inactive"
-                android:paddingStart="14dp"
-                android:paddingEnd="14dp"
-                android:minHeight="0dp"
-                android:minWidth="0dp" />
-
-            <Button
-                android:id="@+id/btn_tab_tools"
-                android:layout_width="wrap_content"
-                android:layout_height="30dp"
-                android:text="Logs"
-                android:textSize="12sp"
-                android:textColor="@color/text_secondary"
-                android:background="@drawable/tab_pill_inactive"
-                android:paddingStart="14dp"
-                android:paddingEnd="14dp"
-                android:minHeight="0dp"
-                android:minWidth="0dp" />
+            <!-- Active indicator -->
+            <View
+                android:id="@+id/indicator_overview"
+                android:layout_width="20dp"
+                android:layout_height="2dp"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/tab_indicator" />
 
         </LinearLayout>
-    </HorizontalScrollView>
 
+        <!-- Clients Tab -->
+        <LinearLayout
+            android:id="@+id/btn_tab_sessions"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true">
+
+            <ImageView
+                android:id="@+id/iv_tab_sessions"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:src="@drawable/ic_users"
+                android:tint="@color/icon_default" />
+
+            <TextView
+                android:id="@+id/tv_tab_sessions"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Clients"
+                android:textSize="10sp"
+                android:textColor="@color/text_muted"
+                android:layout_marginTop="3dp" />
+
+            <View
+                android:id="@+id/indicator_sessions"
+                android:layout_width="20dp"
+                android:layout_height="2dp"
+                android:layout_marginTop="4dp"
+                android:background="@android:color/transparent" />
+
+        </LinearLayout>
+
+        <!-- Settings Tab -->
+        <LinearLayout
+            android:id="@+id/btn_tab_preferences"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true">
+
+            <ImageView
+                android:id="@+id/iv_tab_preferences"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:src="@drawable/ic_sliders"
+                android:tint="@color/icon_default" />
+
+            <TextView
+                android:id="@+id/tv_tab_preferences"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Settings"
+                android:textSize="10sp"
+                android:textColor="@color/text_muted"
+                android:layout_marginTop="3dp" />
+
+            <View
+                android:id="@+id/indicator_preferences"
+                android:layout_width="20dp"
+                android:layout_height="2dp"
+                android:layout_marginTop="4dp"
+                android:background="@android:color/transparent" />
+
+        </LinearLayout>
+
+        <!-- Logs Tab -->
+        <LinearLayout
+            android:id="@+id/btn_tab_tools"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:clickable="true"
+            android:focusable="true">
+
+            <ImageView
+                android:id="@+id/iv_tab_tools"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:src="@drawable/ic_terminal"
+                android:tint="@color/icon_default" />
+
+            <TextView
+                android:id="@+id/tv_tab_tools"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Logs"
+                android:textSize="10sp"
+                android:textColor="@color/text_muted"
+                android:layout_marginTop="3dp" />
+
+            <View
+                android:id="@+id/indicator_tools"
+                android:layout_width="20dp"
+                android:layout_height="2dp"
+                android:layout_marginTop="4dp"
+                android:background="@android:color/transparent" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <!-- Hairline divider -->
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"

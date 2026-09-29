@@ -10,22 +10,31 @@
     <color name="text_secondary">#8E8E93</color>
     <color name="text_muted">#545458</color>
 
-    <!-- Subtle Semantic Tones -->
-    <color name="accent_primary">#F2F2F7</color>
-    <color name="accent_secondary">#AEAEB2</color>
+    <!-- Semantic Status -->
     <color name="status_green">#34C759</color>
     <color name="status_red">#FF453A</color>
 
-    <!-- Compatibility aliases -->
-    <color name="neon_cyan">#EAEAEA</color>
-    <color name="neon_blue">#8E8E93</color>
-    <color name="bg_card">#161618</color>
-    <color name="bg_card_secondary">#1C1C1F</color>
-    <color name="stroke_card">#242428</color>
-    <color name="accent_gradient_end">#1C1C1F</color>
-    <color name="status_green_glow">#2034C759</color>
+    <!-- Icon tints -->
+    <color name="icon_default">#6E6E72</color>
+    <color name="icon_active">#EAEAEA</color>
+
+    <!-- Calm mode badges (no neon) -->
+    <color name="mode_native_bg">#1C3D27</color>
+    <color name="mode_native_text">#34C759</color>
+    <color name="mode_gesture_bg">#1A1A1E</color>
+    <color name="mode_gesture_text">#8E8E93</color>
+
+    <!-- Accent (system-level only) -->
+    <color name="accent_primary">#F2F2F7</color>
+    <color name="accent_secondary">#AEAEB2</color>
+
+    <!-- Graph -->
     <color name="graph_line">#AEAEB2</color>
     <color name="graph_fill_start">#15FFFFFF</color>
     <color name="graph_fill_end">#00000000</color>
     <color name="graph_grid">#1F1F24</color>
+
+    <!-- Compatibility aliases (keep for RamGraphView) -->
+    <color name="bg_card">#161618</color>
+    <color name="stroke_card">#242428</color>
 </resources>
