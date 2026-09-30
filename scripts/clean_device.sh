@@ -83,31 +83,32 @@ echo -e "${GREEN}[✔] Package uninstalled and data cleared.${NC}"
 
 # 3. Remove Magisk Module
 echo -e "\n${YELLOW}[4/7] Removing Magisk module registrations...${NC}"
-adb shell "su" << 'EOF' >/dev/null 2>&1 || true
-rm -rf /data/adb/modules/andwayland \
-       /data/adb/modules_update/andwayland \
-       /data/adb/modules/anative_drawer* \
-       /data/adb/modules_update/anative_drawer*
-EOF
+adb shell "su -mm -c '
+    umount -l /data/adb/modules/andwayland/system/bin/andwayland 2>/dev/null || true
+    umount -l /system/bin/andwayland 2>/dev/null || true
+    umount -l /system/bin/andwayland 2>/dev/null || true
+    rm -rf /data/adb/modules/andwayland \
+           /data/adb/modules_update/andwayland \
+           /data/adb/modules/anative_drawer* \
+           /data/adb/modules_update/anative_drawer*
+'" >/dev/null 2>&1 || true
 echo -e "${GREEN}[✔] Magisk module removed from /data/adb/modules.${NC}"
 
 # 4. Remove Runtime Directory
 echo -e "\n${YELLOW}[5/7] Purging runtime directories and sockets...${NC}"
-adb shell "su" << 'EOF' >/dev/null 2>&1 || true
-rm -rf /data/wayland \
-       /data/anative*
-EOF
+adb shell "su -mm -c 'rm -rf /data/wayland /data/anative*'" >/dev/null 2>&1 || true
 echo -e "${GREEN}[✔] Runtime directory /data/wayland purged.${NC}"
 
 # 5. Clean /data/local/tmp binaries & libraries
 echo -e "\n${YELLOW}[6/7] Cleaning temporary binaries, libraries, and logs in /data/local/tmp...${NC}"
-adb shell "su" << 'EOF' >/dev/null 2>&1 || true
-rm -rf /data/local/tmp/andwayland* \
-       /data/local/tmp/libwayland* \
-       /data/local/tmp/wayland* \
-       /data/local/tmp/screen_wayland* \
-       /data/local/tmp/ANativeDrawer*
-EOF
+adb shell "su -mm -c '
+    rm -rf /data/local/tmp/andwayland* \
+           /data/local/tmp/*satellite* \
+           /data/local/tmp/libwayland* \
+           /data/local/tmp/wayland* \
+           /data/local/tmp/screen_wayland* \
+           /data/local/tmp/ANativeDrawer*
+'" >/dev/null 2>&1 || true
 echo -e "${GREEN}[✔] /data/local/tmp cleaned.${NC}"
 
 # 6. Clean downloaded zips in /sdcard/Download
@@ -138,14 +139,14 @@ else
     echo -e "${GREEN}[✔] Package: com.andwayland.companion completely uninstalled.${NC}"
 fi
 
-VERIFY_MAGISK=$(adb shell "su -c 'ls -d /data/adb/modules/*wayland* /data/adb/modules_update/*wayland* 2>/dev/null'" || true)
+VERIFY_MAGISK=$(adb shell "su -mm -c 'ls -d /data/adb/modules/*wayland* /data/adb/modules_update/*wayland* 2>/dev/null'" || true)
 if [ -n "$VERIFY_MAGISK" ]; then
     echo -e "${RED}[!] Magisk module files found:${NC} $VERIFY_MAGISK"
 else
     echo -e "${GREEN}[✔] Magisk Module: Cleaned from /data/adb/modules.${NC}"
 fi
 
-VERIFY_FILES=$(adb shell "su -c 'ls -d /data/wayland /data/local/tmp/*wayland* /sdcard/Download/*andwayland* 2>/dev/null'" || true)
+VERIFY_FILES=$(adb shell "su -mm -c 'ls -d /data/wayland /data/local/tmp/*wayland* /data/local/tmp/*satellite* /sdcard/Download/*andwayland* 2>/dev/null'" || true)
 if [ -n "$VERIFY_FILES" ]; then
     echo -e "${RED}[!] Residual files detected:${NC}\n$VERIFY_FILES"
 else

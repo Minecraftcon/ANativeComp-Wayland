@@ -23,13 +23,15 @@ ln -sf /data/wayland /data/local/tmp/wayland
 echo "wayland-0" > /data/wayland/.display
 
 # Determine binary location (overlay or module directory)
-BIN="/system/bin/andwayland"
-[ ! -x "$BIN" ] && BIN="$MODDIR/system/bin/andwayland"
+BIN="$MODDIR/system/bin/andwayland"
+if [ -s "/system/bin/andwayland" ] && [ -x "/system/bin/andwayland" ]; then
+    BIN="/system/bin/andwayland"
+fi
 
 # Start the compositor
 export XDG_RUNTIME_DIR=/data/wayland
 export WAYLAND_DISPLAY=wayland-0
-export LD_LIBRARY_PATH=/system/lib64:$MODDIR/system/lib64
+export LD_LIBRARY_PATH=$MODDIR/system/lib64:/system/lib64
 
 # Clean stale sockets, locks, and status from any previous unclean shutdown
 rm -f /data/wayland/wayland-0* /data/wayland/status.json /data/wayland/xwls-* /data/wayland/.xdisplay
