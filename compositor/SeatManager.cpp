@@ -21,6 +21,7 @@
 #include <linux/memfd.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
+#include <sys/inotify.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
@@ -69,7 +70,9 @@ struct EvdevDevice {
     std::string name;
     bool isTouch = false;
     bool isKeyboard = false;
+    bool isTypingKeyboard = false;
     bool isPointer = false;
+    bool isGrabbed = false;
     struct input_absinfo absX{};
     struct input_absinfo absY{};
     struct wl_event_source* source = nullptr;
@@ -126,6 +129,9 @@ struct SeatManager::Impl {
 
     int keymapFd = -1;
     size_t keymapSize = 0;
+
+    int inotifyFd = -1;
+    struct wl_event_source* inotifySource = nullptr;
 
     void handleHoldTimeout() {
         if (gesture.state != PointerGestureState::PENDING_DECISION) {
@@ -316,77 +322,181 @@ bool SeatManager::start(wl_display* display, wl_event_loop* loop, std::shared_pt
     }
 
     struct dirent* ent;
-    int count = 0;
     while ((ent = readdir(dir)) != nullptr) {
         if (strncmp(ent->d_name, "event", 5) != 0) continue;
-        std::string devPath = std::string("/dev/input/") + ent->d_name;
-        int fd = open(devPath.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-        if (fd < 0) {
-            ALOGW("Cannot open %s: %s", devPath.c_str(), strerror(errno));
-            continue;
-        }
-
-        char name[256] = "Unknown";
-        ioctl(fd, EVIOCGNAME(sizeof(name)), name);
-
-        uint8_t evBits[(EV_MAX + 7) / 8] = {0};
-        ioctl(fd, EVIOCGBIT(0, sizeof(evBits)), evBits);
-
-        bool hasKey = evBits[EV_KEY / 8] & (1 << (EV_KEY % 8));
-        bool hasRel = evBits[EV_REL / 8] & (1 << (EV_REL % 8));
-        bool hasAbs = evBits[EV_ABS / 8] & (1 << (EV_ABS % 8));
-
-        EvdevDevice dev;
-        dev.fd = fd;
-        dev.path = devPath;
-        dev.name = name;
-
-        if (hasAbs) {
-            uint8_t absBits[(ABS_MAX + 7) / 8] = {0};
-            ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(absBits)), absBits);
-
-            if (absBits[ABS_MT_POSITION_X / 8] & (1 << (ABS_MT_POSITION_X % 8))) {
-                dev.isTouch = true;
-                ioctl(fd, EVIOCGABS(ABS_MT_POSITION_X), &dev.absX);
-                ioctl(fd, EVIOCGABS(ABS_MT_POSITION_Y), &dev.absY);
-            } else if (absBits[ABS_X / 8] & (1 << (ABS_X % 8))) {
-                dev.isPointer = true;
-                ioctl(fd, EVIOCGABS(ABS_X), &dev.absX);
-                ioctl(fd, EVIOCGABS(ABS_Y), &dev.absY);
-            }
-        }
-        if (hasRel) {
-            dev.isPointer = true;
-        }
-        if (hasKey) {
-            uint8_t keyBits[(KEY_MAX + 7) / 8] = {0};
-            ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keyBits)), keyBits);
-            if ((keyBits[KEY_A / 8] & (1 << (KEY_A % 8))) ||
-                (keyBits[KEY_ENTER / 8] & (1 << (KEY_ENTER % 8))) ||
-                (keyBits[KEY_VOLUMEUP / 8] & (1 << (KEY_VOLUMEUP % 8))) ||
-                (keyBits[KEY_POWER / 8] & (1 << (KEY_POWER % 8)))) {
-                dev.isKeyboard = true;
-            }
-        }
-
-        dev.source = wl_event_loop_add_fd(
-            mImpl->eventLoop, fd, WL_EVENT_READABLE,
-            [](int fd, uint32_t mask, void* data) -> int {
-                return static_cast<SeatManager*>(data)->handleEvdevEvent(fd, mask);
-            },
-            this);
-
-        ALOGI("Enlisted input device %s (%s): touch=%d, kbd=%d, ptr=%d, X=[%d..%d], Y=[%d..%d]",
-              devPath.c_str(), name, dev.isTouch, dev.isKeyboard, dev.isPointer,
-              dev.absX.minimum, dev.absX.maximum, dev.absY.minimum, dev.absY.maximum);
-
-        mImpl->devices.push_back(std::move(dev));
-        count++;
+        enlistDevice(std::string("/dev/input/") + ent->d_name);
     }
     closedir(dir);
 
-    ALOGI("SeatManager started with %d active input devices", count);
-    return count > 0;
+    // Setup inotify for dynamic USB/Bluetooth keyboard hotplugging
+    int inotifyFd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (inotifyFd >= 0) {
+        if (inotify_add_watch(inotifyFd, "/dev/input", IN_CREATE | IN_DELETE) >= 0) {
+            mImpl->inotifySource = wl_event_loop_add_fd(
+                mImpl->eventLoop, inotifyFd, WL_EVENT_READABLE,
+                [](int fd, uint32_t mask, void* data) -> int {
+                    return static_cast<SeatManager*>(data)->handleInotifyEvent(fd, mask);
+                },
+                this);
+            mImpl->inotifyFd = inotifyFd;
+            ALOGI("SeatManager: Hardware input hotplug monitoring active on /dev/input");
+        } else {
+            close(inotifyFd);
+        }
+    }
+
+    ALOGI("SeatManager started with %zu active input devices", mImpl->devices.size());
+    return !mImpl->devices.empty();
+}
+
+void SeatManager::enlistDevice(const std::string& devPath) {
+    for (const auto& d : mImpl->devices) {
+        if (d.path == devPath) return; // already registered
+    }
+
+    int fd = open(devPath.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        ALOGW("SeatManager: Cannot open %s: %s", devPath.c_str(), strerror(errno));
+        return;
+    }
+
+    char name[256] = "Unknown";
+    ioctl(fd, EVIOCGNAME(sizeof(name)), name);
+
+    uint8_t evBits[(EV_MAX + 7) / 8] = {0};
+    ioctl(fd, EVIOCGBIT(0, sizeof(evBits)), evBits);
+
+    bool hasKey = evBits[EV_KEY / 8] & (1 << (EV_KEY % 8));
+    bool hasRel = evBits[EV_REL / 8] & (1 << (EV_REL % 8));
+    bool hasAbs = evBits[EV_ABS / 8] & (1 << (EV_ABS % 8));
+
+    EvdevDevice dev;
+    dev.fd = fd;
+    dev.path = devPath;
+    dev.name = name;
+
+    if (hasAbs) {
+        uint8_t absBits[(ABS_MAX + 7) / 8] = {0};
+        ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(absBits)), absBits);
+
+        if (absBits[ABS_MT_POSITION_X / 8] & (1 << (ABS_MT_POSITION_X % 8))) {
+            dev.isTouch = true;
+            ioctl(fd, EVIOCGABS(ABS_MT_POSITION_X), &dev.absX);
+            ioctl(fd, EVIOCGABS(ABS_MT_POSITION_Y), &dev.absY);
+        } else if (absBits[ABS_X / 8] & (1 << (ABS_X % 8))) {
+            dev.isPointer = true;
+            ioctl(fd, EVIOCGABS(ABS_X), &dev.absX);
+            ioctl(fd, EVIOCGABS(ABS_Y), &dev.absY);
+        }
+    }
+    if (hasRel) {
+        dev.isPointer = true;
+    }
+    if (hasKey) {
+        uint8_t keyBits[(KEY_MAX + 7) / 8] = {0};
+        ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keyBits)), keyBits);
+
+        bool hasAlpha = (keyBits[KEY_A / 8] & (1 << (KEY_A % 8))) &&
+                        (keyBits[KEY_Z / 8] & (1 << (KEY_Z % 8))) &&
+                        (keyBits[KEY_SPACE / 8] & (1 << (KEY_SPACE % 8)));
+        bool hasEnter = (keyBits[KEY_ENTER / 8] & (1 << (KEY_ENTER % 8)));
+        bool hasOtherKeys = (keyBits[KEY_VOLUMEUP / 8] & (1 << (KEY_VOLUMEUP % 8))) ||
+                            (keyBits[KEY_POWER / 8] & (1 << (KEY_POWER % 8)));
+
+        if (hasAlpha || hasEnter || hasOtherKeys) {
+            dev.isKeyboard = true;
+        }
+
+        // Only genuine typing keyboards with full alphabet are grabbed exclusively.
+        // Phone buttons (Volume, Power, Fingerprint) are NEVER grabbed!
+        if (hasAlpha) {
+            dev.isTypingKeyboard = true;
+        }
+    }
+
+    dev.source = wl_event_loop_add_fd(
+        mImpl->eventLoop, fd, WL_EVENT_READABLE,
+        [](int fd, uint32_t mask, void* data) -> int {
+            return static_cast<SeatManager*>(data)->handleEvdevEvent(fd, mask);
+        },
+        this);
+
+    ALOGI("Enlisted input device %s (%s): touch=%d, kbd=%d (typing=%d), ptr=%d, X=[%d..%d], Y=[%d..%d]",
+          devPath.c_str(), name, dev.isTouch, dev.isKeyboard, dev.isTypingKeyboard, dev.isPointer,
+          dev.absX.minimum, dev.absX.maximum, dev.absY.minimum, dev.absY.maximum);
+
+    // If a Wayland window is currently focused, grab this newly plugged typing keyboard immediately
+    if (dev.isTypingKeyboard && mImpl->currentKeyboardSurface != nullptr) {
+        if (ioctl(dev.fd, EVIOCGRAB, 1) == 0) {
+            dev.isGrabbed = true;
+            ALOGI("SeatManager: Grabbed hotplugged typing keyboard %s (%s)", dev.path.c_str(), dev.name.c_str());
+        }
+    }
+
+    mImpl->devices.push_back(std::move(dev));
+}
+
+void SeatManager::removeDevice(const std::string& devPath) {
+    auto it = std::find_if(mImpl->devices.begin(), mImpl->devices.end(),
+                           [&devPath](const EvdevDevice& d) { return d.path == devPath; });
+    if (it != mImpl->devices.end()) {
+        ALOGI("SeatManager: Disconnecting input device %s (%s)", it->path.c_str(), it->name.c_str());
+        if (it->isGrabbed && it->fd >= 0) {
+            ioctl(it->fd, EVIOCGRAB, 0);
+            it->isGrabbed = false;
+        }
+        if (it->source) {
+            wl_event_source_remove(it->source);
+            it->source = nullptr;
+        }
+        if (it->fd >= 0) {
+            close(it->fd);
+            it->fd = -1;
+        }
+        mImpl->devices.erase(it);
+    }
+}
+
+int SeatManager::handleInotifyEvent(int fd, uint32_t mask) {
+    alignas(struct inotify_event) char buf[1024];
+    ssize_t len = read(fd, buf, sizeof(buf));
+    if (len <= 0) return 1;
+
+    for (char* ptr = buf; ptr < buf + len; ) {
+        auto* event = reinterpret_cast<struct inotify_event*>(ptr);
+        if (event->len > 0 && strncmp(event->name, "event", 5) == 0) {
+            std::string devPath = "/dev/input/" + std::string(event->name);
+            if (event->mask & IN_CREATE) {
+                ALOGI("SeatManager: Hotplug event: device added %s", devPath.c_str());
+                enlistDevice(devPath);
+            } else if (event->mask & IN_DELETE) {
+                ALOGI("SeatManager: Hotplug event: device removed %s", devPath.c_str());
+                removeDevice(devPath);
+            }
+        }
+        ptr += sizeof(struct inotify_event) + event->len;
+    }
+    return 1;
+}
+
+void SeatManager::updateKeyboardGrabs(bool grab) {
+    for (auto& dev : mImpl->devices) {
+        if (!dev.isTypingKeyboard || dev.fd < 0) continue;
+        if (grab && !dev.isGrabbed) {
+            if (ioctl(dev.fd, EVIOCGRAB, 1) == 0) {
+                dev.isGrabbed = true;
+                ALOGI("SeatManager: Grabbed hardware keyboard %s (%s) for focused window",
+                      dev.path.c_str(), dev.name.c_str());
+            } else {
+                ALOGW("SeatManager: Failed to grab keyboard %s: %s", dev.path.c_str(), strerror(errno));
+            }
+        } else if (!grab && dev.isGrabbed) {
+            ioctl(dev.fd, EVIOCGRAB, 0);
+            dev.isGrabbed = false;
+            ALOGI("SeatManager: Released hardware keyboard %s (%s) back to Android",
+                  dev.path.c_str(), dev.name.c_str());
+        }
+    }
 }
 
 void SeatManager::run() {
@@ -398,11 +508,26 @@ void SeatManager::run() {
 
 void SeatManager::stop() {
     mRunning = false;
+    updateKeyboardGrabs(false);
+
+    if (mImpl->inotifySource) {
+        wl_event_source_remove(mImpl->inotifySource);
+        mImpl->inotifySource = nullptr;
+    }
+    if (mImpl->inotifyFd >= 0) {
+        close(mImpl->inotifyFd);
+        mImpl->inotifyFd = -1;
+    }
+
     if (mImpl->gesture.holdTimerSource) {
         wl_event_source_remove(mImpl->gesture.holdTimerSource);
         mImpl->gesture.holdTimerSource = nullptr;
     }
     for (auto& dev : mImpl->devices) {
+        if (dev.isGrabbed && dev.fd >= 0) {
+            ioctl(dev.fd, EVIOCGRAB, 0);
+            dev.isGrabbed = false;
+        }
         if (dev.source) {
             wl_event_source_remove(dev.source);
             dev.source = nullptr;
@@ -544,6 +669,14 @@ void SeatManager::setKeyboardFocus(wl_resource* surfaceResource) {
             }
         }
         wl_array_release(&keys);
+
+        // A Wayland window now has keyboard focus:
+        // Grab typing keyboards exclusively to prevent double-input to Android
+        updateKeyboardGrabs(true);
+    } else {
+        // No Wayland window has focus:
+        // Release typing keyboards so Android can receive all inputs
+        updateKeyboardGrabs(false);
     }
 }
 
@@ -682,6 +815,13 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                         }
                     }
                 } else if (ev.code < BTN_MISC) { // Standard keyboard keys
+                    // Super/Windows key releases keyboard grab back to Android
+                    if (ev.value == 1 && (ev.code == KEY_LEFTMETA || ev.code == KEY_RIGHTMETA)) {
+                        ALOGI("SeatManager: Super/Meta key pressed -> yielding keyboard focus to Android");
+                        setKeyboardFocus(nullptr);
+                        return 1;
+                    }
+
                     uint32_t serial = wl_display_next_serial(mImpl->display);
                     uint32_t state = ev.value ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED;
                     if (mImpl->currentKeyboardSurface) {
@@ -818,6 +958,10 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                                   surf->id, targetClient, hasTouchResource, slot.screenX, slot.screenY, localX, localY);
                         } else {
                             ALOGI("Touch DOWN at screen (%d, %d) outside any window", slot.screenX, slot.screenY);
+                            if (mImpl->currentKeyboardSurface) {
+                                ALOGI("SeatManager: Touch outside Wayland windows -> releasing keyboard focus to Android");
+                                setKeyboardFocus(nullptr);
+                            }
                         }
                     }
                     // Case 2: Touch MOTION

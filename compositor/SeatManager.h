@@ -55,6 +55,16 @@ public:
     /** Handle readable event on an evdev fd */
     int handleEvdevEvent(int fd, uint32_t mask);
 
+    /** Handle inotify events for device hotplugging */
+    int handleInotifyEvent(int fd, uint32_t mask);
+
+    /** Enlist/remove an evdev device by filesystem path */
+    void enlistDevice(const std::string& devPath);
+    void removeDevice(const std::string& devPath);
+
+    /** Update EVIOCGRAB on all hardware typing keyboards based on focus */
+    void updateKeyboardGrabs(bool grab);
+
     /** Resource tracking helpers */
     void addPointerResource(wl_resource* resource);
     void addKeyboardResource(wl_resource* resource);
