@@ -31,47 +31,65 @@ export XDG_RUNTIME_DIR=/data/wayland
 export WAYLAND_DISPLAY=wayland-0
 export LD_LIBRARY_PATH=/system/lib64:$MODDIR/system/lib64
 
-# Clean stale socket & status if left from an unclean shutdown
-rm -f /data/wayland/wayland-0* /data/wayland/status.json
+# Clean stale sockets, locks, and status from any previous unclean shutdown
+rm -f /data/wayland/wayland-0* /data/wayland/status.json /data/wayland/xwls-* /data/wayland/.xdisplay
+rm -f /tmp/.X11-unix/X* 2>/dev/null || true
+TERMUX_PREFIX="/data/data/com.termux/files/usr"
+rm -f "$TERMUX_PREFIX/tmp/.X11-unix/X*" 2>/dev/null || true
 
 nohup "$BIN" --socket wayland-0 >> "$LOG" 2>&1 < /dev/null &
 PID=$!
 echo "ANativeDrawer started (pid $PID)" >> "$LOG"
 
-# ─── Rootless Xwayland (via xwayland-satellite) ───────────────────────────────
-# Wait for the Wayland socket to actually appear before launching the bridge.
-# xwayland-satellite connects as a Wayland client; it must not race the compositor.
-XWLOG="/data/wayland/xwayland-satellite.log"
-XWBIN="/system/bin/xwayland-satellite"
-[ ! -x "$XWBIN" ] && XWBIN="$MODDIR/system/bin/xwayland-satellite"
-
-if [ -x "$XWBIN" ]; then
-    SOCKET_WAIT=0
-    while [ ! -S "/data/wayland/wayland-0" ] && [ $SOCKET_WAIT -lt 30 ]; do
-        sleep 1
-        SOCKET_WAIT=$((SOCKET_WAIT + 1))
-    done
-
-    if [ -S "/data/wayland/wayland-0" ]; then
-        # DISPLAY=:0  — xwayland-satellite owns this X display
-        # Xwayland is spawned on-demand when the first X11 client connects.
-        export DISPLAY=:0
-        echo ":0" > /data/wayland/.xdisplay
-        nohup "$XWBIN" >> "$XWLOG" 2>&1 < /dev/null &
-        XWPID=$!
-        echo "xwayland-satellite started (pid $XWPID, DISPLAY=:0)" >> "$LOG"
-    else
-        echo "xwayland-satellite skipped — Wayland socket not ready after 30s" >> "$LOG"
-    fi
-else
-    echo "xwayland-satellite not found, skipping" >> "$LOG"
-fi
-# ─────────────────────────────────────────────────────────────────────────────
-
 # Wait for system_server / ActivityManager to complete boot
+# (Ensures user storage /data/data/com.termux is unlocked and ready)
 while [ "$(getprop sys.boot_completed)" != "1" ]; do
     sleep 2
 done
+
+# ─── Rootless Xwayland Autostart (via xwayland-satellite) ──────────────────────
+# Wait for the Wayland socket to appear before launching the bridge.
+SOCKET_WAIT=0
+while [ ! -S "/data/wayland/wayland-0" ] && [ $SOCKET_WAIT -lt 30 ]; do
+    sleep 1
+    SOCKET_WAIT=$((SOCKET_WAIT + 1))
+done
+
+# Ensure socket & runtime directory are accessible to all clients
+chmod 777 /data/wayland
+chmod 777 /data/wayland/wayland-0* 2>/dev/null || true
+
+TERMUX_DIR="/data/data/com.termux/files"
+TERMUX_UID=$(stat -c %u "$TERMUX_DIR" 2>/dev/null)
+
+if [ -S "/data/wayland/wayland-0" ] && [ -n "$TERMUX_UID" ] && [ -d "$TERMUX_PREFIX" ]; then
+    echo ":1" > /data/wayland/.xdisplay
+    chmod 666 /data/wayland/.xdisplay
+
+    # Prefer xwayland-satellite in Termux bin, fallback to /system/bin
+    SATELLITE_BIN="$TERMUX_PREFIX/bin/xwayland-satellite"
+    [ ! -x "$SATELLITE_BIN" ] && SATELLITE_BIN="/system/bin/xwayland-satellite"
+    [ ! -x "$SATELLITE_BIN" ] && SATELLITE_BIN="$MODDIR/system/bin/xwayland-satellite"
+
+    if [ -x "$SATELLITE_BIN" ]; then
+        # Launch under Termux UID so socket ownership, Xwayland permissions,
+        # and X11 client environments match seamlessly.
+        su $TERMUX_UID -c "
+            export PATH=\"$TERMUX_PREFIX/bin:\$PATH\"
+            export LD_LIBRARY_PATH=\"$TERMUX_PREFIX/lib:/system/lib64:\$LD_LIBRARY_PATH\"
+            export XDG_RUNTIME_DIR=/data/wayland
+            export WAYLAND_DISPLAY=wayland-0
+            export DISPLAY=:1
+            nohup $SATELLITE_BIN :1 > $TERMUX_DIR/home/satellite.log 2>&1 &
+        "
+        echo "xwayland-satellite autostarted for DISPLAY=:1 (UID $TERMUX_UID)" >> "$LOG"
+    else
+        echo "xwayland-satellite binary not found, skipping autostart" >> "$LOG"
+    fi
+else
+    echo "xwayland-satellite skipped (socket or Termux not ready)" >> "$LOG"
+fi
+# ─────────────────────────────────────────────────────────────────────────────
 
 # Ensure Magisk SU grant toasts are silenced for companion app
 COMPANION_UID=$(pm list packages -U 2>/dev/null | grep com.andwayland.companion | sed 's/.*uid://' | head -n 1)
