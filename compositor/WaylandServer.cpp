@@ -18,6 +18,9 @@
 #include "viewporter-protocol.h"
 #include "xdg-decoration-protocol.h"
 #include "xwayland-shell-protocol.h"
+#include "virtual-keyboard-protocol.h"
+#include "text-input-protocol.h"
+#include "input-method-protocol.h"
 #ifdef ENABLE_DMABUF
 #  include "linux-dmabuf-protocol.h"
 #endif
@@ -42,10 +45,6 @@ namespace andwayland {
 // ─────────────────────────────────────────────────────────────────────────────
 // wl_region implementation
 // ─────────────────────────────────────────────────────────────────────────────
-struct RegionData {
-    struct Rect { int32_t x, y, w, h; };
-    std::vector<Rect> rects;
-};
 
 static void region_destroy(wl_client*, wl_resource* resource) {
     wl_resource_destroy(resource);
@@ -396,6 +395,9 @@ bool WaylandServer::init(const std::string& socketName,
     registerViewporterGlobal();
     registerXdgDecorationGlobal();
     registerXwaylandShellGlobal();
+    registerVirtualKeyboardGlobal();
+    registerTextInputManagerGlobal();
+    registerInputMethodManagerGlobal();
 #ifdef ENABLE_DMABUF
     registerLinuxDmaBufGlobal();
 #endif
@@ -436,7 +438,7 @@ bool WaylandServer::init(const std::string& socketName,
 // ─────────────────────────────────────────────────────────────────────────────
 void WaylandServer::registerCompositorGlobal() {
     wl_global_create(mDisplay, &wl_compositor_interface,
-                     5, mBridge.get(), compositor_bind);
+                     6, mBridge.get(), compositor_bind);
 }
 
 void WaylandServer::registerShmGlobal() {
@@ -533,6 +535,42 @@ void WaylandServer::registerXwaylandShellGlobal() {
                      1, mBridge.get(), xwayland_shell_bind);
 }
 
+static void virtual_keyboard_manager_bind(wl_client* client, void* data, uint32_t version, uint32_t id) {
+    auto* seat = static_cast<SeatManager*>(data);
+    if (seat) {
+        seat->bindVirtualKeyboardManager(client, version, id);
+    }
+}
+
+void WaylandServer::registerVirtualKeyboardGlobal() {
+    wl_global_create(mDisplay, &zwp_virtual_keyboard_manager_v1_interface,
+                     1, mSeat.get(), virtual_keyboard_manager_bind);
+}
+
+static void text_input_manager_bind(wl_client* client, void* data, uint32_t version, uint32_t id) {
+    auto* seat = static_cast<SeatManager*>(data);
+    if (seat) {
+        seat->bindTextInputManager(client, version, id);
+    }
+}
+
+void WaylandServer::registerTextInputManagerGlobal() {
+    wl_global_create(mDisplay, &zwp_text_input_manager_v3_interface,
+                     1, mSeat.get(), text_input_manager_bind);
+}
+
+static void input_method_manager_bind(wl_client* client, void* data, uint32_t version, uint32_t id) {
+    auto* seat = static_cast<SeatManager*>(data);
+    if (seat) {
+        seat->bindInputMethodManager(client, version, id);
+    }
+}
+
+void WaylandServer::registerInputMethodManagerGlobal() {
+    wl_global_create(mDisplay, &zwp_input_method_manager_v2_interface,
+                     1, mSeat.get(), input_method_manager_bind);
+}
+
 #ifdef ENABLE_DMABUF
 void WaylandServer::registerLinuxDmaBufGlobal() {
     // Registered by LinuxDmaBuf::registerGlobal(mDisplay, ...)
@@ -540,8 +578,16 @@ void WaylandServer::registerLinuxDmaBufGlobal() {
 #endif
 
 #ifdef ENABLE_LAYER_SHELL
+static void layer_shell_bind(wl_client* client, void* data, uint32_t version, uint32_t id) {
+    auto* bridge = static_cast<SurfaceBridge*>(data);
+    if (bridge) {
+        bridge->bindLayerShell(client, version, id);
+    }
+}
+
 void WaylandServer::registerLayerShellGlobal() {
-    // Registered by LayerShell::registerGlobal(mDisplay, ...)
+    wl_global_create(mDisplay, &zwlr_layer_shell_v1_interface,
+                     4, mBridge.get(), layer_shell_bind);
 }
 #endif
 

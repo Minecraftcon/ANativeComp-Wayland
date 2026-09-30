@@ -31,6 +31,18 @@ class SurfaceFlingerBridge;
 struct SFLayer;
 using SFLayerHandle = std::shared_ptr<SFLayer>;
 
+// Region data for wl_region
+struct RegionRect {
+    int32_t x = 0;
+    int32_t y = 0;
+    int32_t w = 0;
+    int32_t h = 0;
+};
+
+struct RegionData {
+    std::vector<RegionRect> rects;
+};
+
 // Positioner data for xdg_positioner
 struct PositionerData {
     int32_t width = 0;
@@ -61,6 +73,8 @@ struct WaylandSurface {
         int32_t      dx       = 0;
         int32_t      dy       = 0;
         bool         hasBuffer = false;
+        bool         hasInputRegion = false;
+        std::vector<RegionRect> inputRegion;
 
         // Accumulated damage since the last commit, in buffer pixels.
         // Union of all wl_surface.damage / damage_buffer calls. An empty rect
@@ -87,6 +101,8 @@ struct WaylandSurface {
         int32_t width   = 0;
         int32_t height  = 0;
         bool    mapped  = false;
+        bool    hasInputRegion = false;
+        std::vector<RegionRect> inputRegion;
     } committed;
 
     // XDG shell state
@@ -101,6 +117,15 @@ struct WaylandSurface {
     bool          isXwayland      = false;
     uint64_t      xwaylandSerial  = 0;
     wl_resource*  xwaylandSurface = nullptr;
+
+    // Layer shell state (zwlr_layer_shell_v1)
+    bool          isLayerSurface             = false;
+    wl_resource*  layerSurfaceResource       = nullptr;
+    uint32_t      layer                      = 0;
+    uint32_t      layerAnchor                = 0;
+    int32_t       layerDesiredWidth          = 0;
+    int32_t       layerDesiredHeight         = 0;
+    bool          layerKeyboardInteractivity = false;
 
     // Subsurface relationship
     WaylandSurface*              parentSurface = nullptr;
@@ -202,6 +227,11 @@ public:
     // ── Xwayland Shell (Rootless X11 Window Integration) ─────────────────────
     void bindXwaylandShell(wl_client* client, uint32_t version, uint32_t id);
     void getXwaylandSurface(wl_client* client, uint32_t id, wl_resource* surfaceResource, int version = 1);
+
+    // ── Layer Shell (zwlr_layer_shell_v1) ────────────────────────────────────
+    void bindLayerShell(wl_client* client, uint32_t version, uint32_t id);
+    void getLayerSurface(wl_client* client, uint32_t id, wl_resource* surfaceResource,
+                         wl_resource* outputResource, uint32_t layer, const char* scope, int version = 1);
 
     // ── Window Controls ───────────────────────────────────────────────────────
     void toggleMaximize(WaylandSurface* surface);

@@ -13,6 +13,10 @@
 #include "SeatManager.h"
 #include "SurfaceBridge.h"
 #include "DefaultKeymap.h"
+#include "virtual-keyboard-protocol.h"
+#include "text-input-protocol.h"
+#include "input-method-protocol.h"
+#include <signal.h>
 
 #include <wayland-server.h>
 #include <wayland-server-protocol.h>
@@ -103,6 +107,37 @@ struct PointerGestureContext {
     wl_resource* targetSurfaceResource = nullptr;
 };
 
+struct TextInputV3State {
+    bool enabled = false;
+    std::string surroundingText;
+    int32_t cursor = 0;
+    int32_t anchor = 0;
+    bool surroundingChanged = false;
+    uint32_t textChangeCause = 0;
+    uint32_t contentHint = 0;
+    uint32_t contentPurpose = 0;
+    bool contentTypeChanged = false;
+    int32_t cursorX = 0, cursorY = 0, cursorW = 0, cursorH = 0;
+    bool cursorRectChanged = false;
+};
+
+struct TextInputV3Resource {
+    wl_resource* resource = nullptr;
+    wl_client* client = nullptr;
+    wl_resource* focusedSurface = nullptr;
+    SeatManager::Impl* impl = nullptr;
+    TextInputV3State pending;
+    TextInputV3State current;
+};
+
+struct InputMethodV2Resource {
+    wl_resource* resource = nullptr;
+    wl_client* client = nullptr;
+    SeatManager::Impl* impl = nullptr;
+    uint32_t serial = 0;
+    bool active = false;
+};
+
 struct SeatManager::Impl {
     wl_display* display = nullptr;
     wl_event_loop* eventLoop = nullptr;
@@ -132,6 +167,118 @@ struct SeatManager::Impl {
 
     int inotifyFd = -1;
     struct wl_event_source* inotifySource = nullptr;
+
+    std::vector<TextInputV3Resource*> textInputs;
+    TextInputV3Resource* activeTextInput = nullptr;
+
+    std::vector<InputMethodV2Resource*> inputMethods;
+
+    void triggerVirtualKeyboardVisibility(bool show) {
+        DIR* proc = opendir("/proc");
+        if (!proc) return;
+        struct dirent* entry;
+        while ((entry = readdir(proc)) != nullptr) {
+            if (entry->d_type != DT_DIR) continue;
+            char* endptr = nullptr;
+            pid_t pid = strtol(entry->d_name, &endptr, 10);
+            if (!endptr || *endptr != '\0' || pid <= 0) continue;
+            char cmdlinePath[64];
+            snprintf(cmdlinePath, sizeof(cmdlinePath), "/proc/%d/cmdline", pid);
+            FILE* f = fopen(cmdlinePath, "r");
+            if (f) {
+                char cmd[128];
+                size_t n = fread(cmd, 1, sizeof(cmd) - 1, f);
+                fclose(f);
+                if (n > 0) {
+                    cmd[n] = '\0';
+                    if (strstr(cmd, "wvkbd") != nullptr) {
+                        kill(pid, show ? SIGUSR2 : SIGUSR1);
+                    }
+                }
+            }
+        }
+        closedir(proc);
+    }
+
+    void sendInputMethodActivate(TextInputV3Resource* ti) {
+        ALOGI("TextInput: Activating virtual keyboard for text field");
+        for (auto* im : inputMethods) {
+            zwp_input_method_v2_send_activate(im->resource);
+            if (ti && ti->current.surroundingChanged) {
+                zwp_input_method_v2_send_surrounding_text(
+                    im->resource,
+                    ti->current.surroundingText.c_str(),
+                    ti->current.cursor,
+                    ti->current.anchor);
+            }
+            if (ti && ti->current.contentTypeChanged) {
+                zwp_input_method_v2_send_content_type(
+                    im->resource,
+                    ti->current.contentHint,
+                    ti->current.contentPurpose);
+            }
+            im->serial++;
+            zwp_input_method_v2_send_done(im->resource);
+            im->active = true;
+        }
+        triggerVirtualKeyboardVisibility(true);
+    }
+
+    void sendInputMethodDeactivate() {
+        ALOGI("TextInput: Deactivating virtual keyboard");
+        for (auto* im : inputMethods) {
+            if (im->active) {
+                zwp_input_method_v2_send_deactivate(im->resource);
+                im->serial++;
+                zwp_input_method_v2_send_done(im->resource);
+                im->active = false;
+            }
+        }
+        triggerVirtualKeyboardVisibility(false);
+    }
+
+    void sendInputMethodState(TextInputV3Resource* ti) {
+        if (!ti) return;
+        for (auto* im : inputMethods) {
+            if (im->active) {
+                if (ti->current.surroundingChanged) {
+                    zwp_input_method_v2_send_surrounding_text(
+                        im->resource,
+                        ti->current.surroundingText.c_str(),
+                        ti->current.cursor,
+                        ti->current.anchor);
+                }
+                if (ti->current.contentTypeChanged) {
+                    zwp_input_method_v2_send_content_type(
+                        im->resource,
+                        ti->current.contentHint,
+                        ti->current.contentPurpose);
+                }
+                im->serial++;
+                zwp_input_method_v2_send_done(im->resource);
+            }
+        }
+    }
+
+    void handleTextInputCommit(TextInputV3Resource* ti) {
+        bool wasActive = (activeTextInput == ti);
+        bool nowActive = ti->pending.enabled;
+
+        ti->current = ti->pending;
+        ti->pending.surroundingChanged = false;
+        ti->pending.contentTypeChanged = false;
+        ti->pending.cursorRectChanged = false;
+
+        if (nowActive && !wasActive) {
+            activeTextInput = ti;
+            sendInputMethodActivate(ti);
+        } else if (!nowActive && wasActive) {
+            activeTextInput = nullptr;
+            sendInputMethodDeactivate();
+        } else if (nowActive && wasActive) {
+            sendInputMethodState(ti);
+        }
+    }
 
     void handleHoldTimeout() {
         if (gesture.state != PointerGestureState::PENDING_DECISION) {
@@ -285,6 +432,260 @@ static const struct wl_seat_interface seat_iface = {
     .get_touch    = seat_get_touch,
     .release      = seat_release,
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// zwp_virtual_keyboard_v1 implementation
+// ─────────────────────────────────────────────────────────────────────────────
+static void vkbd_keymap(wl_client* /*client*/, wl_resource* /*resource*/,
+                        uint32_t format, int32_t fd, uint32_t size) {
+    ALOGI("VirtualKeyboard: keymap supplied by client (format %u, size %u)", format, size);
+    if (fd >= 0) {
+        close(fd);
+    }
+}
+
+static void vkbd_key(wl_client* /*client*/, wl_resource* resource,
+                     uint32_t time, uint32_t key, uint32_t state) {
+    auto* seat = static_cast<SeatManager*>(wl_resource_get_user_data(resource));
+    if (seat) {
+        seat->injectVirtualKey(time, key, state);
+    }
+}
+
+static void vkbd_modifiers(wl_client* /*client*/, wl_resource* resource,
+                           uint32_t mods_depressed, uint32_t mods_latched,
+                           uint32_t mods_locked, uint32_t group) {
+    auto* seat = static_cast<SeatManager*>(wl_resource_get_user_data(resource));
+    if (seat) {
+        seat->injectVirtualModifiers(mods_depressed, mods_latched, mods_locked, group);
+    }
+}
+
+static void vkbd_destroy(wl_client* /*client*/, wl_resource* resource) {
+    wl_resource_destroy(resource);
+}
+
+static const struct zwp_virtual_keyboard_v1_interface vkbd_iface = {
+    .keymap    = vkbd_keymap,
+    .key       = vkbd_key,
+    .modifiers = vkbd_modifiers,
+    .destroy   = vkbd_destroy,
+};
+
+static void vkbd_mgr_create_virtual_keyboard(wl_client* client, wl_resource* resource,
+                                             wl_resource* /*seat*/, uint32_t id) {
+    auto* seat = static_cast<SeatManager*>(wl_resource_get_user_data(resource));
+    wl_resource* vkbd_res = wl_resource_create(client, &zwp_virtual_keyboard_v1_interface, 1, id);
+    if (!vkbd_res) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(vkbd_res, &vkbd_iface, seat, nullptr);
+    ALOGI("VirtualKeyboard: Client %p created virtual keyboard (id: %u)", client, id);
+}
+
+static const struct zwp_virtual_keyboard_manager_v1_interface vkbd_mgr_iface = {
+    .create_virtual_keyboard = vkbd_mgr_create_virtual_keyboard,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// zwp_text_input_v3 implementation
+// ─────────────────────────────────────────────────────────────────────────────
+static void text_input_destroy(wl_client* /*client*/, wl_resource* resource) {
+    wl_resource_destroy(resource);
+}
+
+static void text_input_enable(wl_client* /*client*/, wl_resource* resource) {
+    auto* ti = static_cast<TextInputV3Resource*>(wl_resource_get_user_data(resource));
+    if (ti) {
+        ti->pending.enabled = true;
+    }
+}
+
+static void text_input_disable(wl_client* /*client*/, wl_resource* resource) {
+    auto* ti = static_cast<TextInputV3Resource*>(wl_resource_get_user_data(resource));
+    if (ti) {
+        ti->pending.enabled = false;
+    }
+}
+
+static void text_input_set_surrounding_text(wl_client* /*client*/, wl_resource* resource,
+                                            const char* text, int32_t cursor, int32_t anchor) {
+    auto* ti = static_cast<TextInputV3Resource*>(wl_resource_get_user_data(resource));
+    if (ti) {
+        ti->pending.surroundingText = text ? text : "";
+        ti->pending.cursor = cursor;
+        ti->pending.anchor = anchor;
+        ti->pending.surroundingChanged = true;
+    }
+}
+
+static void text_input_set_text_change_cause(wl_client* /*client*/, wl_resource* resource, uint32_t cause) {
+    auto* ti = static_cast<TextInputV3Resource*>(wl_resource_get_user_data(resource));
+    if (ti) {
+        ti->pending.textChangeCause = cause;
+    }
+}
+
+static void text_input_set_content_type(wl_client* /*client*/, wl_resource* resource,
+                                       uint32_t hint, uint32_t purpose) {
+    auto* ti = static_cast<TextInputV3Resource*>(wl_resource_get_user_data(resource));
+    if (ti) {
+        ti->pending.contentHint = hint;
+        ti->pending.contentPurpose = purpose;
+        ti->pending.contentTypeChanged = true;
+    }
+}
+
+static void text_input_set_cursor_rectangle(wl_client* /*client*/, wl_resource* resource,
+                                            int32_t x, int32_t y, int32_t width, int32_t height) {
+    auto* ti = static_cast<TextInputV3Resource*>(wl_resource_get_user_data(resource));
+    if (ti) {
+        ti->pending.cursorX = x;
+        ti->pending.cursorY = y;
+        ti->pending.cursorW = width;
+        ti->pending.cursorH = height;
+        ti->pending.cursorRectChanged = true;
+    }
+}
+
+static void text_input_commit(wl_client* /*client*/, wl_resource* resource) {
+    auto* ti = static_cast<TextInputV3Resource*>(wl_resource_get_user_data(resource));
+    if (ti && ti->impl) {
+        ti->impl->handleTextInputCommit(ti);
+    }
+}
+
+static const struct zwp_text_input_v3_interface text_input_v3_iface = {
+    .destroy               = text_input_destroy,
+    .enable                = text_input_enable,
+    .disable               = text_input_disable,
+    .set_surrounding_text  = text_input_set_surrounding_text,
+    .set_text_change_cause = text_input_set_text_change_cause,
+    .set_content_type      = text_input_set_content_type,
+    .set_cursor_rectangle  = text_input_set_cursor_rectangle,
+    .commit                = text_input_commit,
+};
+
+static void text_input_mgr_destroy(wl_client* /*client*/, wl_resource* resource) {
+    wl_resource_destroy(resource);
+}
+
+static void text_input_mgr_get_text_input(wl_client* client, wl_resource* resource,
+                                          uint32_t id, struct wl_resource* /*seat*/) {
+    auto* seat = static_cast<SeatManager*>(wl_resource_get_user_data(resource));
+    if (seat) {
+        seat->createTextInput(client, id);
+    }
+}
+
+static const struct zwp_text_input_manager_v3_interface text_input_mgr_iface = {
+    .destroy        = text_input_mgr_destroy,
+    .get_text_input = text_input_mgr_get_text_input,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// zwp_input_method_v2 implementation
+// ─────────────────────────────────────────────────────────────────────────────
+static void im_commit_string(wl_client* /*client*/, wl_resource* resource, const char* text) {
+    auto* im = static_cast<InputMethodV2Resource*>(wl_resource_get_user_data(resource));
+    if (im && im->impl && im->impl->activeTextInput && im->impl->activeTextInput->resource) {
+        zwp_text_input_v3_send_commit_string(im->impl->activeTextInput->resource, text ? text : "");
+    }
+}
+
+static void im_set_preedit_string(wl_client* /*client*/, wl_resource* resource,
+                                  const char* text, int32_t cursor_begin, int32_t cursor_end) {
+    auto* im = static_cast<InputMethodV2Resource*>(wl_resource_get_user_data(resource));
+    if (im && im->impl && im->impl->activeTextInput && im->impl->activeTextInput->resource) {
+        zwp_text_input_v3_send_preedit_string(im->impl->activeTextInput->resource, text ? text : "",
+                                              cursor_begin, cursor_end);
+    }
+}
+
+static void im_delete_surrounding_text(wl_client* /*client*/, wl_resource* resource,
+                                      uint32_t before_length, uint32_t after_length) {
+    auto* im = static_cast<InputMethodV2Resource*>(wl_resource_get_user_data(resource));
+    if (im && im->impl && im->impl->activeTextInput && im->impl->activeTextInput->resource) {
+        zwp_text_input_v3_send_delete_surrounding_text(im->impl->activeTextInput->resource,
+                                                      before_length, after_length);
+    }
+}
+
+static void im_commit(wl_client* /*client*/, wl_resource* resource, uint32_t /*serial*/) {
+    auto* im = static_cast<InputMethodV2Resource*>(wl_resource_get_user_data(resource));
+    if (im && im->impl && im->impl->activeTextInput && im->impl->activeTextInput->resource) {
+        uint32_t next_serial = wl_display_next_serial(im->impl->display);
+        zwp_text_input_v3_send_done(im->impl->activeTextInput->resource, next_serial);
+    }
+}
+
+static void im_popup_destroy(wl_client*, wl_resource* r) {
+    wl_resource_destroy(r);
+}
+
+static const struct zwp_input_popup_surface_v2_interface im_popup_iface = {
+    .destroy = im_popup_destroy,
+};
+
+static void im_get_input_popup_surface(wl_client* client, wl_resource* /*resource*/,
+                                      uint32_t id, wl_resource* /*surface*/) {
+    wl_resource* popup_res = wl_resource_create(client, &zwp_input_popup_surface_v2_interface, 1, id);
+    if (!popup_res) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(popup_res, &im_popup_iface, nullptr, nullptr);
+}
+
+static void im_grab_release(wl_client*, wl_resource* r) {
+    wl_resource_destroy(r);
+}
+
+static const struct zwp_input_method_keyboard_grab_v2_interface im_grab_iface = {
+    .release = im_grab_release,
+};
+
+static void im_grab_keyboard(wl_client* client, wl_resource* /*resource*/, uint32_t keyboard) {
+    wl_resource* grab_res = wl_resource_create(client, &zwp_input_method_keyboard_grab_v2_interface, 1, keyboard);
+    if (!grab_res) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(grab_res, &im_grab_iface, nullptr, nullptr);
+}
+
+static void im_destroy(wl_client* /*client*/, wl_resource* resource) {
+    wl_resource_destroy(resource);
+}
+
+static const struct zwp_input_method_v2_interface im_iface = {
+    .commit_string           = im_commit_string,
+    .set_preedit_string      = im_set_preedit_string,
+    .delete_surrounding_text = im_delete_surrounding_text,
+    .commit                  = im_commit,
+    .get_input_popup_surface = im_get_input_popup_surface,
+    .grab_keyboard           = im_grab_keyboard,
+    .destroy                 = im_destroy,
+};
+
+static void im_mgr_get_input_method(wl_client* client, wl_resource* resource,
+                                    wl_resource* /*seat*/, uint32_t id) {
+    auto* seat = static_cast<SeatManager*>(wl_resource_get_user_data(resource));
+    if (seat) {
+        seat->createInputMethod(client, id);
+    }
+}
+
+static void im_mgr_destroy(wl_client* /*client*/, wl_resource* resource) {
+    wl_resource_destroy(resource);
+}
+
+static const struct zwp_input_method_manager_v2_interface im_mgr_iface = {
+    .get_input_method = im_mgr_get_input_method,
+    .destroy          = im_mgr_destroy,
+};
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SeatManager Lifecycle
@@ -569,6 +970,157 @@ void SeatManager::bindSeat(wl_client* client, uint32_t version, uint32_t id) {
     mImpl->seatResources.push_back(resource);
 }
 
+void SeatManager::bindVirtualKeyboardManager(wl_client* client, uint32_t version, uint32_t id) {
+    wl_resource* resource = wl_resource_create(client, &zwp_virtual_keyboard_manager_v1_interface,
+                                               static_cast<int>(version), id);
+    if (!resource) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(resource, &vkbd_mgr_iface, this, nullptr);
+    ALOGI("VirtualKeyboardManager bound by client %p (id: %u)", client, id);
+}
+
+void SeatManager::bindTextInputManager(wl_client* client, uint32_t version, uint32_t id) {
+    wl_resource* resource = wl_resource_create(client, &zwp_text_input_manager_v3_interface,
+                                               static_cast<int>(version), id);
+    if (!resource) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(resource, &text_input_mgr_iface, this, nullptr);
+    ALOGI("TextInputManager bound by client %p (id: %u)", client, id);
+}
+
+void SeatManager::createTextInput(wl_client* client, uint32_t id) {
+    wl_resource* ti_res = wl_resource_create(client, &zwp_text_input_v3_interface, 1, id);
+    if (!ti_res) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    auto* ti = new TextInputV3Resource();
+    ti->resource = ti_res;
+    ti->client = client;
+    ti->impl = mImpl.get();
+    mImpl->textInputs.push_back(ti);
+
+    wl_resource_set_implementation(ti_res, &text_input_v3_iface, ti, [](wl_resource* r) {
+        auto* res = static_cast<TextInputV3Resource*>(wl_resource_get_user_data(r));
+        if (res) {
+            if (res->impl) {
+                auto it = std::find(res->impl->textInputs.begin(), res->impl->textInputs.end(), res);
+                if (it != res->impl->textInputs.end()) {
+                    res->impl->textInputs.erase(it);
+                }
+                if (res->impl->activeTextInput == res) {
+                    res->impl->activeTextInput = nullptr;
+                    res->impl->sendInputMethodDeactivate();
+                }
+            }
+            delete res;
+        }
+    });
+
+    if (mImpl->currentKeyboardSurface && wl_resource_get_client(mImpl->currentKeyboardSurface) == client) {
+        ti->focusedSurface = mImpl->currentKeyboardSurface;
+        zwp_text_input_v3_send_enter(ti->resource, mImpl->currentKeyboardSurface);
+    }
+    ALOGI("TextInput: Client %p created text input (id: %u)", client, id);
+}
+
+void SeatManager::bindInputMethodManager(wl_client* client, uint32_t version, uint32_t id) {
+    wl_resource* resource = wl_resource_create(client, &zwp_input_method_manager_v2_interface,
+                                               static_cast<int>(version), id);
+    if (!resource) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(resource, &im_mgr_iface, this, nullptr);
+    ALOGI("InputMethodManager bound by client %p (id: %u)", client, id);
+}
+
+void SeatManager::createInputMethod(wl_client* client, uint32_t id) {
+    wl_resource* im_res = wl_resource_create(client, &zwp_input_method_v2_interface, 1, id);
+    if (!im_res) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    auto* im = new InputMethodV2Resource();
+    im->resource = im_res;
+    im->client = client;
+    im->impl = mImpl.get();
+    mImpl->inputMethods.push_back(im);
+
+    wl_resource_set_implementation(im_res, &im_iface, im, [](wl_resource* r) {
+        auto* res = static_cast<InputMethodV2Resource*>(wl_resource_get_user_data(r));
+        if (res) {
+            if (res->impl) {
+                auto it = std::find(res->impl->inputMethods.begin(), res->impl->inputMethods.end(), res);
+                if (it != res->impl->inputMethods.end()) {
+                    res->impl->inputMethods.erase(it);
+                }
+            }
+            delete res;
+        }
+    });
+
+    ALOGI("InputMethod: Client %p created input method (id: %u)", client, id);
+
+    if (mImpl->activeTextInput && mImpl->activeTextInput->current.enabled) {
+        zwp_input_method_v2_send_activate(im->resource);
+        if (mImpl->activeTextInput->current.surroundingChanged) {
+            zwp_input_method_v2_send_surrounding_text(
+                im->resource,
+                mImpl->activeTextInput->current.surroundingText.c_str(),
+                mImpl->activeTextInput->current.cursor,
+                mImpl->activeTextInput->current.anchor);
+        }
+        if (mImpl->activeTextInput->current.contentTypeChanged) {
+            zwp_input_method_v2_send_content_type(
+                im->resource,
+                mImpl->activeTextInput->current.contentHint,
+                mImpl->activeTextInput->current.contentPurpose);
+        }
+        im->serial++;
+        zwp_input_method_v2_send_done(im->resource);
+        im->active = true;
+    }
+}
+
+void SeatManager::injectVirtualKey(uint32_t timeMs, uint32_t key, uint32_t state) {
+    if (!mImpl->display) return;
+    if (timeMs == 0) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        timeMs = static_cast<uint32_t>(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+    }
+    uint32_t serial = wl_display_next_serial(mImpl->display);
+    if (mImpl->currentKeyboardSurface) {
+        struct wl_client* targetClient = wl_resource_get_client(mImpl->currentKeyboardSurface);
+        for (wl_resource* kbd : mImpl->keyboardResources) {
+            if (wl_resource_get_client(kbd) == targetClient) {
+                wl_keyboard_send_key(kbd, serial, timeMs, key, state);
+            }
+        }
+    } else {
+        ALOGI("VirtualKeyboard: Key event (key=%u, state=%u) dropped: no focused surface", key, state);
+    }
+}
+
+void SeatManager::injectVirtualModifiers(uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
+    if (!mImpl->display) return;
+    uint32_t serial = wl_display_next_serial(mImpl->display);
+    if (mImpl->currentKeyboardSurface) {
+        struct wl_client* targetClient = wl_resource_get_client(mImpl->currentKeyboardSurface);
+        for (wl_resource* kbd : mImpl->keyboardResources) {
+            if (wl_resource_get_client(kbd) == targetClient) {
+                wl_keyboard_send_modifiers(kbd, serial, depressed, latched, locked, group);
+            }
+        }
+    }
+}
+
+
 void SeatManager::addPointerResource(wl_resource* resource) {
     mImpl->pointerResources.push_back(resource);
 }
@@ -641,6 +1193,18 @@ void SeatManager::notifySurfaceDestroyed(wl_resource* surfaceResource) {
             mImpl->touchSlots[s].down = false;
         }
     }
+
+    for (auto* ti : mImpl->textInputs) {
+        if (ti->focusedSurface == surfaceResource) {
+            ti->focusedSurface = nullptr;
+            ti->pending.enabled = false;
+            ti->current.enabled = false;
+            if (mImpl->activeTextInput == ti) {
+                mImpl->activeTextInput = nullptr;
+                mImpl->sendInputMethodDeactivate();
+            }
+        }
+    }
 }
 
 void SeatManager::setKeyboardFocus(wl_resource* surfaceResource) {
@@ -653,6 +1217,18 @@ void SeatManager::setKeyboardFocus(wl_resource* surfaceResource) {
         for (wl_resource* kbd : mImpl->keyboardResources) {
             if (wl_resource_get_client(kbd) == oldClient) {
                 wl_keyboard_send_leave(kbd, serial, mImpl->currentKeyboardSurface);
+            }
+        }
+        for (auto* ti : mImpl->textInputs) {
+            if (ti->client == oldClient) {
+                zwp_text_input_v3_send_leave(ti->resource, mImpl->currentKeyboardSurface);
+                ti->focusedSurface = nullptr;
+                ti->pending.enabled = false;
+                ti->current.enabled = false;
+                if (mImpl->activeTextInput == ti) {
+                    mImpl->activeTextInput = nullptr;
+                    mImpl->sendInputMethodDeactivate();
+                }
             }
         }
     }
@@ -670,11 +1246,22 @@ void SeatManager::setKeyboardFocus(wl_resource* surfaceResource) {
         }
         wl_array_release(&keys);
 
+        for (auto* ti : mImpl->textInputs) {
+            if (ti->client == newClient) {
+                ti->focusedSurface = mImpl->currentKeyboardSurface;
+                zwp_text_input_v3_send_enter(ti->resource, mImpl->currentKeyboardSurface);
+            }
+        }
+
         // A Wayland window now has keyboard focus:
         // Grab typing keyboards exclusively to prevent double-input to Android
         updateKeyboardGrabs(true);
     } else {
         // No Wayland window has focus:
+        if (mImpl->activeTextInput) {
+            mImpl->activeTextInput = nullptr;
+            mImpl->sendInputMethodDeactivate();
+        }
         // Release typing keyboards so Android can receive all inputs
         updateKeyboardGrabs(false);
     }
@@ -798,7 +1385,7 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                         } else if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
                             if (mImpl->bridge && mImpl->currentPointerSurface) {
                                 WaylandSurface* surf = mImpl->bridge->surfaceFromResource(mImpl->currentPointerSurface);
-                                if (surf) {
+                                if (surf && (!surf->isLayerSurface || surf->layerKeyboardInteractivity)) {
                                     mImpl->bridge->activateSurface(surf);
                                 }
                             }
@@ -875,8 +1462,10 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                         }
 
                         if (surf && surf->resource) {
-                            mImpl->bridge->activateSurface(surf);
-                            setKeyboardFocus(surf->resource);
+                            if (!surf->isLayerSurface || surf->layerKeyboardInteractivity) {
+                                mImpl->bridge->activateSurface(surf);
+                                setKeyboardFocus(surf->resource);
+                            }
 
                             struct wl_client* targetClient = wl_resource_get_client(surf->resource);
 

@@ -1,0 +1,25 @@
+#!/system/bin/sh
+# toggle-keyboard: starts wvkbd if not running, or toggles visibility with SIGUSR1/2
+
+PID=$(pidof wvkbd-mobintl 2>/dev/null || pidof wvkbd 2>/dev/null)
+STATE_FILE="/data/wayland/.keyboard_hidden"
+
+if [ -n "$PID" ]; then
+    if [ -f "$STATE_FILE" ]; then
+        rm -f "$STATE_FILE"
+        kill -12 "$PID" 2>/dev/null || true  # SIGUSR2 = show
+    else
+        touch "$STATE_FILE"
+        kill -10 "$PID" 2>/dev/null || true  # SIGUSR1 = hide
+    fi
+else
+    rm -f "$STATE_FILE"
+    export WAYLAND_DISPLAY=wayland-0
+    export XDG_RUNTIME_DIR=/data/wayland
+    TERMUX_UID=$(stat -c %u "/data/data/com.termux/files" 2>/dev/null)
+    if [ "$(id -u)" = "0" ] && [ -n "$TERMUX_UID" ]; then
+        su $TERMUX_UID -c "env WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/data/wayland LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib:/data/adb/modules/andwayland/system/lib64 /data/data/com.termux/files/usr/bin/wvkbd-mobintl --hidden --auto -H 350" &
+    else
+        /data/data/com.termux/files/usr/bin/wvkbd-mobintl --hidden --auto -H 350 &
+    fi
+fi

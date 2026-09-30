@@ -82,6 +82,9 @@ private:
     void registerViewporterGlobal();
     void registerXdgDecorationGlobal();
     void registerXwaylandShellGlobal();
+    void registerVirtualKeyboardGlobal();
+    void registerTextInputManagerGlobal();
+    void registerInputMethodManagerGlobal();
 #ifdef ENABLE_DMABUF
     void registerLinuxDmaBufGlobal();
 #endif

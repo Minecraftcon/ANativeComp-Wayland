@@ -27,6 +27,9 @@
 #include "xdg-shell-protocol.h"
 #include "xdg-decoration-protocol.h"
 #include "xwayland-shell-protocol.h"
+#ifdef ENABLE_LAYER_SHELL
+#include "layer-shell-protocol.h"
+#endif
 #include "SimpleFont.h"
 
 #include <android/log.h>
@@ -95,7 +98,26 @@ static void surface_frame(wl_client* client, wl_resource* resource, uint32_t cal
 }
 
 static void surface_set_opaque_region(wl_client*, wl_resource*, wl_resource*) {}
-static void surface_set_input_region(wl_client*, wl_resource*, wl_resource*) {}
+
+static void surface_set_input_region(wl_client*, wl_resource* resource, wl_resource* regionResource) {
+    auto* bridge  = static_cast<SurfaceBridge*>(wl_resource_get_user_data(resource));
+    if (!bridge) return;
+    WaylandSurface* surface = bridge->surfaceFromResource(resource);
+    if (!surface) return;
+
+    if (!regionResource) {
+        surface->pending.hasInputRegion = false;
+        surface->pending.inputRegion.clear();
+    } else {
+        auto* reg = static_cast<RegionData*>(wl_resource_get_user_data(regionResource));
+        surface->pending.hasInputRegion = true;
+        if (reg) {
+            surface->pending.inputRegion = reg->rects;
+        } else {
+            surface->pending.inputRegion.clear();
+        }
+    }
+}
 
 static void surface_commit(wl_client*, wl_resource* resource) {
     auto* bridge  = static_cast<SurfaceBridge*>(wl_resource_get_user_data(resource));
@@ -723,6 +745,155 @@ void SurfaceBridge::getXwaylandSurface(wl_client* client, uint32_t id,
     });
 }
 
+#ifdef ENABLE_LAYER_SHELL
+// ─────────────────────────────────────────────────────────────────────────────
+// zwlr_layer_surface_v1 implementation
+// ─────────────────────────────────────────────────────────────────────────────
+static void layer_surface_set_size(wl_client*, wl_resource* resource, uint32_t width, uint32_t height) {
+    auto* surface = static_cast<WaylandSurface*>(wl_resource_get_user_data(resource));
+    if (surface) {
+        surface->layerDesiredWidth = static_cast<int32_t>(width);
+        surface->layerDesiredHeight = static_cast<int32_t>(height);
+        ALOGI("LayerSurface: set_size %dx%d for surface %u", width, height, surface->id);
+    }
+}
+
+static void layer_surface_set_anchor(wl_client*, wl_resource* resource, uint32_t anchor) {
+    auto* surface = static_cast<WaylandSurface*>(wl_resource_get_user_data(resource));
+    if (surface) {
+        surface->layerAnchor = anchor;
+        ALOGI("LayerSurface: set_anchor 0x%x for surface %u", anchor, surface->id);
+    }
+}
+
+static void layer_surface_set_exclusive_zone(wl_client*, wl_resource*, int32_t) {}
+
+static void layer_surface_set_margin(wl_client*, wl_resource*, int32_t, int32_t, int32_t, int32_t) {}
+
+static void layer_surface_set_keyboard_interactivity(wl_client*, wl_resource* resource,
+                                                     uint32_t keyboard_interactivity) {
+    auto* surface = static_cast<WaylandSurface*>(wl_resource_get_user_data(resource));
+    if (surface) {
+        surface->layerKeyboardInteractivity = (keyboard_interactivity != 0);
+        ALOGI("LayerSurface: set_keyboard_interactivity=%u for surface %u",
+              keyboard_interactivity, surface->id);
+    }
+}
+
+static void layer_surface_get_popup(wl_client*, wl_resource* resource, wl_resource* popupRes) {
+    auto* layerSurf = static_cast<WaylandSurface*>(wl_resource_get_user_data(resource));
+    if (!layerSurf || !popupRes) return;
+    auto* popupData = static_cast<XdgSurfaceData*>(wl_resource_get_user_data(popupRes));
+    if (!popupData || !popupData->surface) return;
+    popupData->surface->parentSurface = layerSurf;
+    layerSurf->popups.push_back(popupData->surface);
+    ALOGI("LayerSurface: popup %u linked to layer surface %u", popupData->surface->id, layerSurf->id);
+}
+
+static void layer_surface_ack_configure(wl_client*, wl_resource*, uint32_t) {}
+
+static void layer_surface_destroy(wl_client*, wl_resource* resource) {
+    wl_resource_destroy(resource);
+}
+
+static void layer_surface_set_layer(wl_client*, wl_resource* resource, uint32_t layer) {
+    auto* surface = static_cast<WaylandSurface*>(wl_resource_get_user_data(resource));
+    if (surface) {
+        surface->layer = layer;
+    }
+}
+
+static const struct zwlr_layer_surface_v1_interface layer_surface_impl = {
+    .set_size                   = layer_surface_set_size,
+    .set_anchor                 = layer_surface_set_anchor,
+    .set_exclusive_zone         = layer_surface_set_exclusive_zone,
+    .set_margin                 = layer_surface_set_margin,
+    .set_keyboard_interactivity = layer_surface_set_keyboard_interactivity,
+    .get_popup                  = layer_surface_get_popup,
+    .ack_configure              = layer_surface_ack_configure,
+    .destroy                    = layer_surface_destroy,
+    .set_layer                  = layer_surface_set_layer,
+};
+
+static void layer_shell_destroy(wl_client*, wl_resource* resource) {
+    wl_resource_destroy(resource);
+}
+
+static void layer_shell_get_layer_surface(wl_client* client, wl_resource* resource,
+                                         uint32_t id, wl_resource* surfaceResource,
+                                         wl_resource* outputResource, uint32_t layer,
+                                         const char* scope) {
+    auto* bridge = static_cast<SurfaceBridge*>(wl_resource_get_user_data(resource));
+    if (bridge) {
+        int version = wl_resource_get_version(resource);
+        bridge->getLayerSurface(client, id, surfaceResource, outputResource, layer, scope, version);
+    }
+}
+
+static const struct zwlr_layer_shell_v1_interface layer_shell_impl = {
+    .get_layer_surface = layer_shell_get_layer_surface,
+    .destroy           = layer_shell_destroy,
+};
+
+void SurfaceBridge::bindLayerShell(wl_client* client, uint32_t version, uint32_t id) {
+    ALOGI("bindLayerShell: client=%p, version=%u, id=%u", client, version, id);
+    wl_resource* resource = wl_resource_create(client, &zwlr_layer_shell_v1_interface,
+                                               static_cast<int>(version), id);
+    if (!resource) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(resource, &layer_shell_impl, this, nullptr);
+}
+
+void SurfaceBridge::getLayerSurface(wl_client* client, uint32_t id,
+                                   wl_resource* surfaceResource,
+                                   wl_resource* /*outputResource*/,
+                                   uint32_t layer, const char* scope, int version) {
+    WaylandSurface* surface = surfaceFromResource(surfaceResource);
+    if (!surface) {
+        wl_resource_post_error(surfaceResource, WL_DISPLAY_ERROR_INVALID_OBJECT, "Surface not found");
+        return;
+    }
+    if (surface->xdgSurface || surface->xdgToplevel || surface->xdgPopup || surface->isSubsurface || surface->isXwayland) {
+        wl_resource_post_error(surfaceResource, ZWLR_LAYER_SHELL_V1_ERROR_ROLE, "Surface already has another role");
+        return;
+    }
+
+    surface->isLayerSurface = true;
+    surface->layer = layer;
+    surface->layerAnchor = 0;
+    surface->layerDesiredWidth = 0;
+    surface->layerDesiredHeight = 0;
+    surface->layerKeyboardInteractivity = false;
+
+    wl_resource* layerRes = wl_resource_create(client, &zwlr_layer_surface_v1_interface,
+                                               version, id);
+    if (!layerRes) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    surface->layerSurfaceResource = layerRes;
+
+    wl_resource_set_implementation(layerRes, &layer_surface_impl, surface, [](wl_resource* r) {
+        auto* surf = static_cast<WaylandSurface*>(wl_resource_get_user_data(r));
+        if (surf) {
+            surf->layerSurfaceResource = nullptr;
+            surf->isLayerSurface = false;
+        }
+    });
+
+    // Note: Do NOT send configure here! Per wlr-layer-shell-unstable-v1 specification,
+    // the client sets its properties (set_size, set_anchor, etc.) and performs an
+    // initial commit without a buffer attached. The compositor then replies to that
+    // initial commit with a configure event containing the negotiated dimensions.
+
+    ALOGI("getLayerSurface: Created layer surface for surface %u (scope: '%s', layer: %u)",
+          surface->id, scope ? scope : "default", layer);
+}
+#endif
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // wl_output
 // ─────────────────────────────────────────────────────────────────────────────
@@ -865,12 +1036,40 @@ void SurfaceBridge::bindOutput(wl_client* client, uint32_t version, uint32_t id)
 // commitSurface — the hot path
 // ─────────────────────────────────────────────────────────────────────────────
 void SurfaceBridge::commitSurface(WaylandSurface* surface) {
+    // ── 0. Commit double-buffered input region state ──────────────────────────
+    if (surface->pending.hasInputRegion) {
+        surface->committed.hasInputRegion = true;
+        surface->committed.inputRegion = surface->pending.inputRegion;
+    } else {
+        surface->committed.hasInputRegion = false;
+        surface->committed.inputRegion.clear();
+    }
+
     // ── 1. Lazy-create the SurfaceFlinger layer ───────────────────────────────
     if (!surface->sfLayer) {
+#ifdef ENABLE_LAYER_SHELL
+        // Layer shell initial configure before buffer attachment
+        if (surface->isLayerSurface && surface->layerSurfaceResource && (!surface->pending.hasBuffer || !surface->pending.buffer)) {
+            uint32_t serial = wl_display_next_serial(wl_client_get_display(wl_resource_get_client(surface->resource)));
+            uint32_t targetW = surface->layerDesiredWidth > 0 ? surface->layerDesiredWidth : mDisplayWidth;
+            uint32_t targetH = surface->layerDesiredHeight > 0 ? surface->layerDesiredHeight :
+                               ((surface->layerAnchor & (ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM)) ==
+                                (ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM) ? mDisplayHeight : 400);
+            zwlr_layer_surface_v1_send_configure(surface->layerSurfaceResource, serial, targetW, targetH);
+            ALOGI("LayerSurface: sent configure for surface %u: %ux%u (anchor 0x%x, desired %ux%u, serial %u)",
+                  surface->id, targetW, targetH, surface->layerAnchor,
+                  surface->layerDesiredWidth, surface->layerDesiredHeight, serial);
+        }
+#endif
+
         // Only create a SurfaceFlinger layer if this surface has a valid window role:
-        // xdgToplevel, xdgPopup, subsurface, or isXwayland!
+        // xdgToplevel, xdgPopup, subsurface, isXwayland, or isLayerSurface!
         // Do NOT create window layers for cursor surfaces or unassigned surfaces!
-        if (surface->isCursor || (!surface->xdgToplevel && !surface->xdgPopup && !surface->isSubsurface && !surface->isXwayland)) {
+        if (surface->isCursor || (!surface->xdgToplevel && !surface->xdgPopup && !surface->isSubsurface && !surface->isXwayland
+#ifdef ENABLE_LAYER_SHELL
+            && !surface->isLayerSurface
+#endif
+        )) {
             return;
         }
 
@@ -895,6 +1094,11 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
 
             std::string name = (surface->isXwayland ? "xwayland#" : "wl_surface#") + std::to_string(surface->id);
             int32_t z = surface->zOrder;
+#ifdef ENABLE_LAYER_SHELL
+            if (surface->isLayerSurface) {
+                z = 3000000;
+            } else
+#endif
             if (surface->isSubsurface && surface->parentSurface) {
                 z = surface->parentSurface->zOrder + 20;
             } else if (surface->isPopup && surface->parentSurface) {
@@ -912,6 +1116,27 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
 
             int32_t posX = 0;
             int32_t posY = 0;
+#ifdef ENABLE_LAYER_SHELL
+            if (surface->isLayerSurface) {
+                if (surface->layerAnchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM) {
+                    posY = mDisplayHeight - layerH;
+                } else if (surface->layerAnchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP) {
+                    posY = 0;
+                } else {
+                    posY = (mDisplayHeight - layerH) / 2;
+                }
+
+                if (surface->layerAnchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT) {
+                    posX = 0;
+                } else if (surface->layerAnchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT) {
+                    posX = mDisplayWidth - layerW;
+                } else {
+                    posX = (mDisplayWidth - layerW) / 2;
+                }
+                ALOGI("Layer surface %u placed at (%d, %d), size %dx%d (anchor 0x%x)",
+                      surface->id, posX, posY, layerW, layerH, surface->layerAnchor);
+            } else
+#endif
             if (surface->isSubsurface && surface->parentSurface) {
                 posX = surface->parentSurface->committed.x + surface->subX;
                 posY = surface->parentSurface->committed.y + surface->subY;
@@ -1006,6 +1231,31 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
             surface->committed.y = targetY;
         }
     }
+
+#ifdef ENABLE_LAYER_SHELL
+    // Keep layer surface position in sync on commit
+    if (surface->isLayerSurface && surface->sfLayer) {
+        int32_t targetX = surface->committed.x;
+        int32_t targetY = surface->committed.y;
+        if (surface->layerAnchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM) {
+            targetY = mDisplayHeight - surface->committed.height;
+        } else if (surface->layerAnchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP) {
+            targetY = 0;
+        }
+        if (surface->layerAnchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT) {
+            targetX = 0;
+        } else if (surface->layerAnchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT) {
+            targetX = mDisplayWidth - surface->committed.width;
+        }
+        if (targetX != surface->committed.x || targetY != surface->committed.y) {
+            SurfaceFlingerBridge::Transaction tx;
+            tx.setPosition(surface->sfLayer, targetX, targetY);
+            tx.apply();
+            surface->committed.x = targetX;
+            surface->committed.y = targetY;
+        }
+    }
+#endif
 
     // ── 2. Copy/import the buffer ─────────────────────────────────────────────
     if (surface->pending.hasBuffer && surface->pending.buffer) {
@@ -1264,6 +1514,14 @@ void SurfaceBridge::destroySurface(WaylandSurface* surface) {
     }
     surface->frameCallbacks.clear();
 
+#ifdef ENABLE_LAYER_SHELL
+    if (surface->layerSurfaceResource) {
+        wl_resource_destroy(surface->layerSurfaceResource);
+        surface->layerSurfaceResource = nullptr;
+    }
+#endif
+
+
     wl_resource* res = surface->resource;
     mSurfaces.erase(res);
     ALOGI("wl_surface destroyed");
@@ -1307,7 +1565,11 @@ WaylandSurface* SurfaceBridge::surfaceAt(int32_t screenX, int32_t screenY,
 
     for (const auto& [res, surf] : mSurfaces) {
         if (!surf || !surf->committed.mapped || !surf->sfLayer || surf->isCursor) continue;
+#ifdef ENABLE_LAYER_SHELL
+        if (!surf->xdgToplevel && !surf->xdgPopup && !surf->isSubsurface && !surf->isXwayland && !surf->isLayerSurface) continue;
+#else
         if (!surf->xdgToplevel && !surf->xdgPopup && !surf->isSubsurface && !surf->isXwayland) continue;
+#endif
         int32_t sx = surf->committed.x;
         int32_t sy = surf->committed.y;
         int32_t sw = surf->committed.width;
@@ -1320,7 +1582,33 @@ WaylandSurface* SurfaceBridge::surfaceAt(int32_t screenX, int32_t screenY,
 
         if (screenX >= sx && screenX < sx + sw &&
             screenY >= topY && screenY < sy + sh) {
+
+            // Check input region if defined
+            if (surf->committed.hasInputRegion) {
+                if (surf->committed.inputRegion.empty()) {
+                    // Empty input region means surface is completely non-interactive / click-through
+                    continue;
+                }
+                int32_t lx = screenX - sx;
+                int32_t ly = screenY - sy;
+                bool hit = false;
+                for (const auto& r : surf->committed.inputRegion) {
+                    if (lx >= r.x && lx < r.x + r.w && ly >= r.y && ly < r.y + r.h) {
+                        hit = true;
+                        break;
+                    }
+                }
+                if (!hit) {
+                    continue;
+                }
+            }
+
             int32_t effectiveZ = surf->zOrder;
+#ifdef ENABLE_LAYER_SHELL
+            if (surf->isLayerSurface) {
+                effectiveZ = 3000000;
+            } else
+#endif
             if (surf->isPopup && surf->parentSurface) {
                 effectiveZ = surf->parentSurface->zOrder + 50;
             } else if (surf->isSubsurface && surf->parentSurface) {
@@ -1554,6 +1842,9 @@ int32_t SurfaceBridge::allocateZOrder() {
 
 void SurfaceBridge::activateSurface(WaylandSurface* surface) {
     if (!surface) return;
+#ifdef ENABLE_LAYER_SHELL
+    if (surface->isLayerSurface) return;
+#endif
     WaylandSurface* root = surface;
     while (root && root->parentSurface) {
         root = root->parentSurface;

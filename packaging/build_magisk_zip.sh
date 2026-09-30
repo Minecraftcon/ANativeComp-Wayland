@@ -33,6 +33,16 @@ if [ -f "$REPO_ROOT/xwayland/prebuilt/start-xwayland" ]; then
     chmod 755 "$MAGISK_DIR/system/bin/start-xwayland"
 fi
 
+if [ -f "$REPO_ROOT/tools/prebuilt/wvkbd-mobintl" ]; then
+    cp -f "$REPO_ROOT/tools/prebuilt/wvkbd-mobintl" "$MAGISK_DIR/system/bin/wvkbd-mobintl"
+    chmod 755 "$MAGISK_DIR/system/bin/wvkbd-mobintl"
+fi
+
+if [ -f "$REPO_ROOT/tools/prebuilt/toggle-keyboard" ]; then
+    cp -f "$REPO_ROOT/tools/prebuilt/toggle-keyboard" "$MAGISK_DIR/system/bin/toggle-keyboard"
+    chmod 755 "$MAGISK_DIR/system/bin/toggle-keyboard"
+fi
+
 if [ -f "$REPO_ROOT/third_party/wayland/lib/libwayland-server.so" ]; then
     cp -f "$REPO_ROOT/third_party/wayland/lib/libwayland-server.so" "$MAGISK_DIR/system/lib64/libwayland-server.so"
     chmod 644 "$MAGISK_DIR/system/lib64/libwayland-server.so"

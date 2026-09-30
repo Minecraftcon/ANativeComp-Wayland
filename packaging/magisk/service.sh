@@ -64,10 +64,11 @@ chmod 777 /data/wayland/wayland-0* 2>/dev/null || true
 # Note: andwayland automatically starts and supervises xwayland-satellite :1.
 # Fallback check after 5 seconds:
 sleep 5
+TERMUX_DIR="/data/data/com.termux/files"
+TERMUX_UID=$(stat -c %u "$TERMUX_DIR" 2>/dev/null)
+[ -z "$TERMUX_UID" ] && TERMUX_UID=$(pm list packages -U com.termux 2>/dev/null | grep -E '^package:com\.termux ' | sed -n 's/.*uid:\([0-9]*\).*/\1/p')
+
 if ! pidof xwayland-satellite >/dev/null 2>&1; then
-    TERMUX_DIR="/data/data/com.termux/files"
-    TERMUX_UID=$(stat -c %u "$TERMUX_DIR" 2>/dev/null)
-    [ -z "$TERMUX_UID" ] && TERMUX_UID=$(pm list packages -U com.termux 2>/dev/null | grep -E '^package:com\.termux ' | sed -n 's/.*uid:\([0-9]*\).*/\1/p')
     SATELLITE_BIN="$TERMUX_PREFIX/bin/xwayland-satellite"
     [ ! -x "$SATELLITE_BIN" ] && SATELLITE_BIN="/system/bin/xwayland-satellite"
     [ ! -x "$SATELLITE_BIN" ] && SATELLITE_BIN="$MODDIR/system/bin/xwayland-satellite"
@@ -89,6 +90,29 @@ EOF
         su $TERMUX_UID -c /data/wayland/run_satellite.sh
         echo "xwayland-satellite fallback started for DISPLAY=:1 (UID $TERMUX_UID)" >> "$LOG"
     fi
+fi
+
+# ─── Virtual Keyboard Autostart (hidden & auto-activated via IME) ─────────────
+WVKBD_BIN="$TERMUX_PREFIX/bin/wvkbd-mobintl"
+if [ -x "$WVKBD_BIN" ] && [ -n "$TERMUX_UID" ]; then
+    # Generate GTK3 immodules cache if missing so GTK automatically uses Wayland IM
+    if [ -x "$TERMUX_PREFIX/bin/gtk-query-immodules-3.0" ] && [ ! -f "$TERMUX_PREFIX/lib/gtk-3.0/3.0.0/immodules.cache" ]; then
+        su $TERMUX_UID -c "$TERMUX_PREFIX/bin/gtk-query-immodules-3.0 > $TERMUX_PREFIX/lib/gtk-3.0/3.0.0/immodules.cache" 2>/dev/null || true
+    fi
+
+    cat << EOF > /data/wayland/run_wvkbd.sh
+#!/system/bin/sh
+export PATH="$TERMUX_PREFIX/bin:\$PATH"
+export LD_LIBRARY_PATH="$TERMUX_PREFIX/lib:$MODDIR/system/lib64:\$LD_LIBRARY_PATH"
+export XDG_RUNTIME_DIR=/data/wayland
+export WAYLAND_DISPLAY=wayland-0
+exec $WVKBD_BIN --hidden --auto -H 350
+EOF
+    chmod 755 /data/wayland/run_wvkbd.sh
+    chown $TERMUX_UID:$TERMUX_UID /data/wayland/run_wvkbd.sh
+    pkill -f wvkbd-mobintl 2>/dev/null || true
+    su $TERMUX_UID -c /data/wayland/run_wvkbd.sh >/dev/null 2>&1 &
+    echo "wvkbd-mobintl started in background (--hidden --auto) (UID $TERMUX_UID)" >> "$LOG"
 fi
 # ─────────────────────────────────────────────────────────────────────────────
 
