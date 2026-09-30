@@ -31,6 +31,8 @@
 
 #include <android/log.h>
 #include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <cstring>
 #include <cassert>
 
@@ -741,6 +743,28 @@ SurfaceBridge::SurfaceBridge(SurfaceFlingerBridge& sfBridge)
 
 SurfaceBridge::~SurfaceBridge() = default;
 
+static bool isClientXwayland(wl_client* client) {
+    if (!client) return false;
+    pid_t pid = 0;
+    wl_client_get_credentials(client, &pid, nullptr, nullptr);
+    if (pid <= 0) return false;
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/cmdline", pid);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    char buf[256];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return false;
+    buf[n] = '\0';
+    for (ssize_t i = 0; i < n; ++i) {
+        if (buf[i] == '\0') buf[i] = ' ';
+    }
+    std::string cmd(buf);
+    return cmd.find("xwayland-satellite") != std::string::npos ||
+           cmd.find("Xwayland") != std::string::npos;
+}
+
 void SurfaceBridge::createSurface(wl_client* client, uint32_t id, int version) {
     wl_resource* resource = wl_resource_create(client, &wl_surface_interface, version, id);
     if (!resource) {
@@ -753,6 +777,11 @@ void SurfaceBridge::createSurface(wl_client* client, uint32_t id, int version) {
     surface->resource  = resource;
     surface->zOrder    = allocateZOrder();
     surface->bridge    = this;
+
+    if (isClientXwayland(client)) {
+        surface->isXwayland = true;
+        ALOGI("createSurface: surface %u identified as Xwayland (satellite) surface", id);
+    }
 
     wl_resource_set_implementation(resource, &surface_interface,
                                    this, surface_resource_destructor);

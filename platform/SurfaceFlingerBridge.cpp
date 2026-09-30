@@ -143,24 +143,59 @@ DisplayInfo SurfaceFlingerBridge::getDisplayInfo() const {
     if (!mImpl) return info;
 
     android::sp<android::IBinder> token =
-        android::SurfaceComposerClient::getPhysicalDisplayToken(mImpl->primaryDisplayId);
+        android::SurfaceComposerClient::getInternalDisplayToken();
+    if (!token) {
+        token = android::SurfaceComposerClient::getPhysicalDisplayToken(mImpl->primaryDisplayId);
+    }
 
     android::ui::DisplayState state;
     int32_t layerStackW = 0, layerStackH = 0;
-    if (android::SurfaceComposerClient::getDisplayState(token, &state) == android::NO_ERROR) {
+    if (token && android::SurfaceComposerClient::getDisplayState(token, &state) == android::NO_ERROR) {
         layerStackW      = state.layerStackSpaceRect.getWidth();
         layerStackH      = state.layerStackSpaceRect.getHeight();
         info.orientation = static_cast<int32_t>(state.orientation);
     }
 
+    // Check "wm size" for user or display scale override (e.g. 684x1520 vs physical 720x1600)
+    int32_t wmOverrideW = 0, wmOverrideH = 0;
+    int32_t wmPhysW = 0, wmPhysH = 0;
+    FILE* fp = popen("wm size 2>/dev/null", "r");
+    if (fp) {
+        char line[128];
+        while (fgets(line, sizeof(line), fp)) {
+            int w = 0, h = 0;
+            if (sscanf(line, "Override size: %dx%d", &w, &h) == 2) {
+                wmOverrideW = w;
+                wmOverrideH = h;
+            } else if (sscanf(line, "Physical size: %dx%d", &w, &h) == 2) {
+                wmPhysW = w;
+                wmPhysH = h;
+            }
+        }
+        pclose(fp);
+    }
+
+    if (wmOverrideW > 0 && wmOverrideH > 0) {
+        layerStackW = wmOverrideW;
+        layerStackH = wmOverrideH;
+        ALOGI("SurfaceFlingerBridge: Using wm size override: %dx%d", wmOverrideW, wmOverrideH);
+    }
+
     android::ui::DisplayMode activeMode;
-    if (android::SurfaceComposerClient::getActiveDisplayMode(token, &activeMode) == android::NO_ERROR) {
+    if (token && android::SurfaceComposerClient::getActiveDisplayMode(token, &activeMode) == android::NO_ERROR) {
         info.width       = (layerStackW > 0) ? layerStackW : activeMode.resolution.width;
         info.height      = (layerStackH > 0) ? layerStackH : activeMode.resolution.height;
         info.xdpi        = activeMode.xDpi;
         info.ydpi        = activeMode.yDpi;
         info.refreshRate = activeMode.refreshRate;
+    } else {
+        info.width       = (layerStackW > 0) ? layerStackW : (wmPhysW > 0 ? wmPhysW : 720);
+        info.height      = (layerStackH > 0) ? layerStackH : (wmPhysH > 0 ? wmPhysH : 1280);
+        info.refreshRate = 60.0f;
     }
+
+    ALOGI("SurfaceFlingerBridge: getDisplayInfo -> %dx%d (layerStack: %dx%d, refresh: %.1fHz)",
+          info.width, info.height, layerStackW, layerStackH, info.refreshRate);
 
     return info;
 }
@@ -211,9 +246,13 @@ SFLayerHandle SurfaceFlingerBridge::createLayer(const std::string& name,
 
 void SurfaceFlingerBridge::destroyLayer(SFLayerHandle& layer) {
     if (!layer) return;
+    if (layer->surface) {
+        layer->surface.clear();
+    }
     if (layer->surfaceControl) {
         android::SurfaceComposerClient::Transaction{}
             .hide(layer->surfaceControl)
+            .reparent(layer->surfaceControl, nullptr)
             .apply();
         layer->surfaceControl.clear();
     }

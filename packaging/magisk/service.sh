@@ -59,35 +59,34 @@ done
 chmod 777 /data/wayland
 chmod 777 /data/wayland/wayland-0* 2>/dev/null || true
 
-TERMUX_DIR="/data/data/com.termux/files"
-TERMUX_UID=$(stat -c %u "$TERMUX_DIR" 2>/dev/null)
-
-if [ -S "/data/wayland/wayland-0" ] && [ -n "$TERMUX_UID" ] && [ -d "$TERMUX_PREFIX" ]; then
-    echo ":1" > /data/wayland/.xdisplay
-    chmod 666 /data/wayland/.xdisplay
-
-    # Prefer xwayland-satellite in Termux bin, fallback to /system/bin
+# Note: andwayland automatically starts and supervises xwayland-satellite :1.
+# Fallback check after 5 seconds:
+sleep 5
+if ! pidof xwayland-satellite >/dev/null 2>&1; then
+    TERMUX_DIR="/data/data/com.termux/files"
+    TERMUX_UID=$(stat -c %u "$TERMUX_DIR" 2>/dev/null)
+    [ -z "$TERMUX_UID" ] && TERMUX_UID=$(pm list packages -U com.termux 2>/dev/null | grep -E '^package:com\.termux ' | sed -n 's/.*uid:\([0-9]*\).*/\1/p')
     SATELLITE_BIN="$TERMUX_PREFIX/bin/xwayland-satellite"
     [ ! -x "$SATELLITE_BIN" ] && SATELLITE_BIN="/system/bin/xwayland-satellite"
     [ ! -x "$SATELLITE_BIN" ] && SATELLITE_BIN="$MODDIR/system/bin/xwayland-satellite"
 
-    if [ -x "$SATELLITE_BIN" ]; then
-        # Launch under Termux UID so socket ownership, Xwayland permissions,
-        # and X11 client environments match seamlessly.
-        su $TERMUX_UID -c "
-            export PATH=\"$TERMUX_PREFIX/bin:\$PATH\"
-            export LD_LIBRARY_PATH=\"$TERMUX_PREFIX/lib:/system/lib64:\$LD_LIBRARY_PATH\"
-            export XDG_RUNTIME_DIR=/data/wayland
-            export WAYLAND_DISPLAY=wayland-0
-            export DISPLAY=:1
-            nohup $SATELLITE_BIN :1 > $TERMUX_DIR/home/satellite.log 2>&1 &
-        "
-        echo "xwayland-satellite autostarted for DISPLAY=:1 (UID $TERMUX_UID)" >> "$LOG"
-    else
-        echo "xwayland-satellite binary not found, skipping autostart" >> "$LOG"
+    if [ -x "$SATELLITE_BIN" ] && [ -n "$TERMUX_UID" ]; then
+        echo ":1" > /data/wayland/.xdisplay
+        chmod 666 /data/wayland/.xdisplay
+        cat << EOF > /data/wayland/run_satellite.sh
+#!/system/bin/sh
+export PATH="$TERMUX_PREFIX/bin:\$PATH"
+export LD_LIBRARY_PATH="$TERMUX_PREFIX/lib:/system/lib64:\$LD_LIBRARY_PATH"
+export XDG_RUNTIME_DIR=/data/wayland
+export WAYLAND_DISPLAY=wayland-0
+export DISPLAY=:1
+nohup $SATELLITE_BIN :1 > $TERMUX_DIR/home/satellite.log 2>&1 &
+EOF
+        chmod 755 /data/wayland/run_satellite.sh
+        chown $TERMUX_UID:$TERMUX_UID /data/wayland/run_satellite.sh
+        su $TERMUX_UID -c /data/wayland/run_satellite.sh
+        echo "xwayland-satellite fallback started for DISPLAY=:1 (UID $TERMUX_UID)" >> "$LOG"
     fi
-else
-    echo "xwayland-satellite skipped (socket or Termux not ready)" >> "$LOG"
 fi
 # ─────────────────────────────────────────────────────────────────────────────
 

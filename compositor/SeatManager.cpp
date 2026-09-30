@@ -144,17 +144,15 @@ struct SeatManager::Impl {
         clock_gettime(CLOCK_MONOTONIC, &ts);
         uint32_t timeMs = static_cast<uint32_t>(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 
+        gesture.state = PointerGestureState::HOLD_TRIGGERED;
         for (wl_resource* ptr : pointerResources) {
             if (wl_resource_get_client(ptr) == targetClient) {
-                wl_pointer_send_motion(ptr, timeMs,
-                                       wl_fixed_from_int(gesture.localX),
-                                       wl_fixed_from_int(gesture.localY));
+                wl_pointer_send_button(ptr, serial, timeMs, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
                 wl_pointer_send_button(ptr, serial, timeMs, BTN_RIGHT, WL_POINTER_BUTTON_STATE_PRESSED);
-                wl_pointer_send_button(ptr, serial, timeMs, BTN_RIGHT, WL_POINTER_BUTTON_STATE_RELEASED);
                 wl_pointer_send_frame(ptr);
             }
         }
-        ALOGI("Gesture: HOLD triggered -> sent BTN_RIGHT click to surface at (%d, %d)",
+        ALOGI("Pointer Emulation: HOLD triggered -> switched BTN_LEFT to BTN_RIGHT at (%d, %d)",
               gesture.localX, gesture.localY);
     }
 
@@ -582,20 +580,7 @@ void SeatManager::setPointerFocus(wl_resource* surfaceResource) {
 // ─────────────────────────────────────────────────────────────────────────────
 static bool isNonTouchApp(const WaylandSurface* surf) {
     if (!surf) return false;
-    if (surf->isXwayland) return true;
-    std::string id = surf->appId;
-    std::transform(id.begin(), id.end(), id.begin(), ::tolower);
-    if (id.find("foot") != std::string::npos ||
-        id.find("terminal") != std::string::npos ||
-        id.find("alacritty") != std::string::npos ||
-        id.find("kitty") != std::string::npos ||
-        id.find("wezterm") != std::string::npos ||
-        id.find("xterm") != std::string::npos ||
-        id.find("st") != std::string::npos ||
-        id.find("xwayland") != std::string::npos) {
-        return true;
-    }
-    return false;
+    return surf->isXwayland;
 }
 
 int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
@@ -806,12 +791,6 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                                 mImpl->pointerScreenX = slot.screenX;
                                 mImpl->pointerScreenY = slot.screenY;
 
-                                // Check for double-tap
-                                int32_t tapDx = slot.screenX - mImpl->gesture.lastTapScreenX;
-                                int32_t tapDy = slot.screenY - mImpl->gesture.lastTapScreenY;
-                                bool isDoubleTap = (timeMs - mImpl->gesture.lastTapTimeMs < 300) &&
-                                                   ((tapDx * tapDx + tapDy * tapDy) < 25 * 25);
-
                                 mImpl->gesture.startScreenX = slot.screenX;
                                 mImpl->gesture.startScreenY = slot.screenY;
                                 mImpl->gesture.lastScreenX  = slot.screenX;
@@ -821,28 +800,19 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                                 mImpl->gesture.downTimeMs   = timeMs;
                                 mImpl->gesture.targetSurface = surf;
                                 mImpl->gesture.targetSurfaceResource = surf->resource;
+                                mImpl->gesture.state        = PointerGestureState::DRAGGING_SELECTION;
 
-                                if (isDoubleTap) {
-                                    if (mImpl->gesture.holdTimerSource) {
-                                        wl_event_source_timer_update(mImpl->gesture.holdTimerSource, 0);
+                                for (wl_resource* ptr : mImpl->pointerResources) {
+                                    if (wl_resource_get_client(ptr) == targetClient) {
+                                        wl_pointer_send_button(ptr, serial, timeMs, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+                                        wl_pointer_send_frame(ptr);
                                     }
-                                    mImpl->gesture.state = PointerGestureState::DRAGGING_SELECTION;
-                                    mImpl->gesture.lastTapTimeMs = 0; // consumed
-
-                                    for (wl_resource* ptr : mImpl->pointerResources) {
-                                        if (wl_resource_get_client(ptr) == targetClient) {
-                                            wl_pointer_send_button(ptr, serial, timeMs, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
-                                            wl_pointer_send_frame(ptr);
-                                        }
-                                    }
-                                    ALOGI("Gesture: Double-tap detected -> BTN_LEFT PRESSED for drag selection / double-click");
-                                } else {
-                                    mImpl->gesture.state = PointerGestureState::PENDING_DECISION;
-                                    if (mImpl->gesture.holdTimerSource) {
-                                        wl_event_source_timer_update(mImpl->gesture.holdTimerSource, 450);
-                                    }
-                                    ALOGI("Gesture: Touch DOWN -> PENDING_DECISION (timer 450ms armed)");
                                 }
+
+                                if (mImpl->gesture.holdTimerSource) {
+                                    wl_event_source_timer_update(mImpl->gesture.holdTimerSource, 500);
+                                }
+                                ALOGI("Pointer Emulation: Touch DOWN -> BTN_LEFT PRESSED at (%d, %d)", localX, localY);
                             }
                             ALOGI("Touch DOWN on surface %u (client %p, hasTouch=%d) at screen (%d, %d) -> local (%d, %d)",
                                   surf->id, targetClient, hasTouchResource, slot.screenX, slot.screenY, localX, localY);
@@ -891,21 +861,26 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                                 mImpl->pointerScreenX = slot.screenX;
                                 mImpl->pointerScreenY = slot.screenY;
 
-                                if (mImpl->gesture.state == PointerGestureState::PENDING_DECISION) {
-                                    int32_t dx = slot.screenX - mImpl->gesture.startScreenX;
-                                    int32_t dy = slot.screenY - mImpl->gesture.startScreenY;
-                                    if ((dx * dx + dy * dy) >= 10 * 10) {
-                                        if (mImpl->gesture.holdTimerSource) {
-                                            wl_event_source_timer_update(mImpl->gesture.holdTimerSource, 0);
-                                        }
-                                        mImpl->gesture.state = PointerGestureState::SCROLLING;
-                                        mImpl->gesture.lastScreenX = slot.screenX;
-                                        mImpl->gesture.lastScreenY = slot.screenY;
-                                        ALOGI("Gesture: Displaced >= 10px -> entered SCROLLING");
+                                int32_t dx = slot.screenX - mImpl->gesture.startScreenX;
+                                int32_t dy = slot.screenY - mImpl->gesture.startScreenY;
+                                if ((dx * dx + dy * dy) >= 10 * 10) {
+                                    if (mImpl->gesture.holdTimerSource) {
+                                        wl_event_source_timer_update(mImpl->gesture.holdTimerSource, 0);
                                     }
                                 }
 
-                                if (mImpl->gesture.state == PointerGestureState::SCROLLING) {
+                                // If a second finger is touching, treat motion as scrolling!
+                                bool twoFingersDown = (mImpl->touchSlots[1].trackingId >= 0 && mImpl->touchSlots[1].down);
+                                if (twoFingersDown) {
+                                    if (mImpl->gesture.state != PointerGestureState::SCROLLING) {
+                                        mImpl->gesture.state = PointerGestureState::SCROLLING;
+                                        for (wl_resource* ptr : mImpl->pointerResources) {
+                                            if (wl_resource_get_client(ptr) == targetClient) {
+                                                wl_pointer_send_button(ptr, serial, timeMs, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+                                                wl_pointer_send_frame(ptr);
+                                            }
+                                        }
+                                    }
                                     int32_t deltaX = slot.screenX - mImpl->gesture.lastScreenX;
                                     int32_t deltaY = slot.screenY - mImpl->gesture.lastScreenY;
                                     mImpl->gesture.lastScreenX = slot.screenX;
@@ -914,13 +889,12 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                                     for (wl_resource* ptr : mImpl->pointerResources) {
                                         if (wl_resource_get_client(ptr) == targetClient) {
                                             if (deltaY != 0) {
-                                                // Natural scrolling: finger moves UP (deltaY < 0) -> scroll down (+value)
-                                                wl_fixed_t scrollValY = wl_fixed_from_double(-deltaY * 1.5);
-                                                wl_pointer_send_axis(ptr, timeMs, WL_POINTER_AXIS_VERTICAL_SCROLL, scrollValY);
+                                                wl_pointer_send_axis(ptr, timeMs, WL_POINTER_AXIS_VERTICAL_SCROLL,
+                                                                     wl_fixed_from_double(-deltaY * 2.0));
                                             }
                                             if (deltaX != 0) {
-                                                wl_fixed_t scrollValX = wl_fixed_from_double(-deltaX * 1.5);
-                                                wl_pointer_send_axis(ptr, timeMs, WL_POINTER_AXIS_HORIZONTAL_SCROLL, scrollValX);
+                                                wl_pointer_send_axis(ptr, timeMs, WL_POINTER_AXIS_HORIZONTAL_SCROLL,
+                                                                     wl_fixed_from_double(-deltaX * 2.0));
                                             }
                                             wl_pointer_send_frame(ptr);
                                         }
@@ -970,27 +944,14 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                                     wl_event_source_timer_update(mImpl->gesture.holdTimerSource, 0);
                                 }
 
-                                if (mImpl->gesture.state == PointerGestureState::PENDING_DECISION) {
-                                    uint32_t duration = timeMs - mImpl->gesture.downTimeMs;
-                                    int32_t dx = slot.screenX - mImpl->gesture.startScreenX;
-                                    int32_t dy = slot.screenY - mImpl->gesture.startScreenY;
-                                    if (duration < 450 && (dx * dx + dy * dy < 15 * 15)) {
-                                        for (wl_resource* ptr : mImpl->pointerResources) {
-                                            if (wl_resource_get_client(ptr) == targetClient) {
-                                                wl_pointer_send_motion(ptr, timeMs,
-                                                                       wl_fixed_from_int(mImpl->gesture.localX),
-                                                                       wl_fixed_from_int(mImpl->gesture.localY));
-                                                wl_pointer_send_button(ptr, serial, timeMs, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
-                                                wl_pointer_send_button(ptr, serial, timeMs, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
-                                                wl_pointer_send_frame(ptr);
-                                            }
+                                if (mImpl->gesture.state == PointerGestureState::HOLD_TRIGGERED) {
+                                    for (wl_resource* ptr : mImpl->pointerResources) {
+                                        if (wl_resource_get_client(ptr) == targetClient) {
+                                            wl_pointer_send_button(ptr, serial, timeMs, BTN_RIGHT, WL_POINTER_BUTTON_STATE_RELEASED);
+                                            wl_pointer_send_frame(ptr);
                                         }
-                                        mImpl->gesture.lastTapTimeMs = timeMs;
-                                        mImpl->gesture.lastTapScreenX = mImpl->gesture.startScreenX;
-                                        mImpl->gesture.lastTapScreenY = mImpl->gesture.startScreenY;
-                                        ALOGI("Gesture: TAP detected -> sent BTN_LEFT click to client %p at (%d, %d)",
-                                              targetClient, mImpl->gesture.localX, mImpl->gesture.localY);
                                     }
+                                    ALOGI("Pointer Emulation: HOLD ended -> released BTN_RIGHT");
                                 } else if (mImpl->gesture.state == PointerGestureState::DRAGGING_SELECTION) {
                                     for (wl_resource* ptr : mImpl->pointerResources) {
                                         if (wl_resource_get_client(ptr) == targetClient) {
@@ -998,11 +959,7 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                                             wl_pointer_send_frame(ptr);
                                         }
                                     }
-                                    ALOGI("Gesture: DRAGGING_SELECTION ended -> released BTN_LEFT");
-                                } else if (mImpl->gesture.state == PointerGestureState::SCROLLING) {
-                                    ALOGI("Gesture: SCROLLING ended");
-                                } else if (mImpl->gesture.state == PointerGestureState::HOLD_TRIGGERED) {
-                                    ALOGI("Gesture: HOLD ended");
+                                    ALOGI("Pointer Emulation: released BTN_LEFT at local (%d, %d)", mImpl->gesture.localX, mImpl->gesture.localY);
                                 }
 
                                 mImpl->gesture.state = PointerGestureState::IDLE;

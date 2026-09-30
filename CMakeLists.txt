@@ -156,6 +156,12 @@ target_link_libraries(andwayland PRIVATE
     -Wl,--allow-shlib-undefined
 )
 
+target_link_options(andwayland PRIVATE
+    "-Wl,-rpath,/data/adb/modules/andwayland/system/lib64"
+    "-Wl,-rpath,/data/data/com.termux/files/usr/lib"
+    "-Wl,-rpath,/system/lib64"
+)
+
 if(ENABLE_ASAN)
     target_link_options(andwayland PRIVATE -fsanitize=address)
 endif()

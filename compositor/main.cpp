@@ -24,6 +24,8 @@
 #include <memory>
 #include <thread>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 #define LOG_TAG "andwayland"
@@ -34,10 +36,98 @@
 // Global server pointer for signal handler
 // ─────────────────────────────────────────────────────────────────────────────
 static andwayland::WaylandServer* gServer = nullptr;
+static pid_t gSatellitePid = -1;
 
 static void signalHandler(int sig) {
     ALOGI("Received signal %d (%s), shutting down...", sig, strsignal(sig));
+    if (gSatellitePid > 0) {
+        kill(gSatellitePid, SIGTERM);
+    }
     if (gServer) gServer->stop();
+}
+
+static uid_t detectTermuxUid() {
+    struct stat st;
+    if (stat("/data/data/com.termux/files", &st) == 0 && st.st_uid > 0) {
+        return st.st_uid;
+    }
+    FILE* fp = popen("pm list packages -U com.termux 2>/dev/null", "r");
+    if (fp) {
+        char line[128];
+        while (fgets(line, sizeof(line), fp)) {
+            unsigned int u = 0;
+            if (sscanf(line, "package:com.termux uid:%u", &u) == 1) {
+                pclose(fp);
+                return static_cast<uid_t>(u);
+            }
+        }
+        pclose(fp);
+    }
+    return 10296;
+}
+
+static pid_t startXwaylandSatellite(const char* socketName) {
+    const char* satelliteBin = nullptr;
+    if (access("/data/data/com.termux/files/usr/bin/xwayland-satellite", X_OK) == 0) {
+        satelliteBin = "/data/data/com.termux/files/usr/bin/xwayland-satellite";
+    } else if (access("/system/bin/xwayland-satellite", X_OK) == 0) {
+        satelliteBin = "/system/bin/xwayland-satellite";
+    } else if (access("/data/adb/modules/andwayland/system/bin/xwayland-satellite", X_OK) == 0) {
+        satelliteBin = "/data/adb/modules/andwayland/system/bin/xwayland-satellite";
+    }
+
+    if (!satelliteBin) {
+        ALOGI("xwayland-satellite binary not found; skipping automatic X11 bridge");
+        return -1;
+    }
+
+    // Clean up stale locks/sockets before starting
+    unlink("/data/wayland/xwls-1");
+    unlink("/data/wayland/xwls-1.lock");
+    unlink("/data/data/com.termux/files/usr/tmp/.X11-unix/X1");
+    unlink("/data/data/com.termux/files/usr/tmp/.X11-unix/X1-lock");
+
+    uid_t termuxUid = detectTermuxUid();
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        ALOGE("Failed to fork xwayland-satellite: %s", strerror(errno));
+        return -1;
+    }
+
+    if (pid == 0) {
+        if (getuid() == 0 && termuxUid > 0) {
+            setgid(termuxUid);
+            setuid(termuxUid);
+        }
+
+        setenv("PATH", "/data/data/com.termux/files/usr/bin:/system/bin:/system/xbin", 1);
+        setenv("LD_LIBRARY_PATH", "/data/data/com.termux/files/usr/lib:/system/lib64", 1);
+        setenv("XDG_RUNTIME_DIR", "/data/wayland", 1);
+        setenv("WAYLAND_DISPLAY", socketName, 1);
+        setenv("DISPLAY", ":1", 1);
+
+        int logFd = open("/data/data/com.termux/files/home/satellite.log",
+                         O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
+        if (logFd >= 0) {
+            dup2(logFd, STDOUT_FILENO);
+            dup2(logFd, STDERR_FILENO);
+            close(logFd);
+        }
+
+        execl(satelliteBin, "xwayland-satellite", ":1", nullptr);
+        _exit(127);
+    }
+
+    FILE* fpX = fopen("/data/wayland/.xdisplay", "w");
+    if (fpX) {
+        fputs(":1\n", fpX);
+        fclose(fpX);
+        chmod("/data/wayland/.xdisplay", 0666);
+    }
+
+    ALOGI("Started xwayland-satellite supervisor (PID %d, UID %u) for DISPLAY=:1", pid, termuxUid);
+    return pid;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -157,12 +247,22 @@ int main(int argc, char* argv[]) {
         chmod("/data/wayland/status.json", 0666);
     }
 
+    // ── 3.5. Start rootless Xwayland satellite bridge ────────────────────────
+    gSatellitePid = startXwaylandSatellite(socketName);
+
     // ── 4. Run Wayland event loop (main thread blocks here; evdev events are dispatched via wl_event_loop fds) ──
     server.run();
 
     // ── 5. Cleanup ────────────────────────────────────────────────────────────
     ALOGI("Shutting down...");
+    if (gSatellitePid > 0) {
+        ALOGI("Stopping xwayland-satellite (PID %d)...", gSatellitePid);
+        kill(gSatellitePid, SIGTERM);
+        waitpid(gSatellitePid, nullptr, WNOHANG);
+        gSatellitePid = -1;
+    }
     unlink("/data/wayland/status.json");
+    unlink("/data/wayland/.xdisplay");
     if (testLayer) sfBridge.destroyLayer(testLayer);
     seat->stop();
     sfBridge.shutdown();
