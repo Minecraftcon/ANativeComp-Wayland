@@ -893,6 +893,7 @@ void SurfaceBridge::getLayerSurface(wl_client* client, uint32_t id,
 }
 
 void SurfaceBridge::setLayerSurfacesVisible(bool visible) {
+    mLayerSurfacesVisible = visible;
     SurfaceFlingerBridge::Transaction tx;
     bool hasChanges = false;
     for (auto& [res, surf] : mSurfaces) {
@@ -905,6 +906,17 @@ void SurfaceBridge::setLayerSurfacesVisible(bool visible) {
             }
             hasChanges = true;
             ALOGI("LayerSurface: surface %u setVisible=%d", surf->id, visible);
+
+            for (WaylandSurface* pop : surf->popups) {
+                if (pop && pop->sfLayer) {
+                    pop->committed.mapped = visible;
+                    if (visible) {
+                        tx.show(pop->sfLayer);
+                    } else {
+                        tx.hide(pop->sfLayer);
+                    }
+                }
+            }
         }
     }
     if (hasChanges) {
@@ -1205,14 +1217,23 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
                       surface->id, posX, posY, layerW, layerH);
             }
 
+            bool shouldShow = true;
+#ifdef ENABLE_LAYER_SHELL
+            if (surface->isLayerSurface && !mLayerSurfacesVisible) {
+                shouldShow = false;
+            }
+#endif
             SurfaceFlingerBridge::Transaction tx;
             tx.setPosition(surface->sfLayer, posX, posY);
+            if (!shouldShow) {
+                tx.hide(surface->sfLayer);
+            }
             tx.apply();
             surface->committed.x = posX;
             surface->committed.y = posY;
             surface->committed.width = layerW;
             surface->committed.height = layerH;
-            surface->committed.mapped = true;
+            surface->committed.mapped = shouldShow;
 
             if (surface->xdgToplevel || surface->isXwayland) {
                 activateSurface(surface);
@@ -1306,10 +1327,20 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
 
     // ── 2. Copy/import the buffer ─────────────────────────────────────────────
     if (surface->pending.hasBuffer && surface->pending.buffer) {
-        surface->committed.mapped = true;
+        bool shouldShow = true;
+#ifdef ENABLE_LAYER_SHELL
+        if (surface->isLayerSurface && !mLayerSurfacesVisible) {
+            shouldShow = false;
+        }
+#endif
+        surface->committed.mapped = shouldShow;
         if (surface->sfLayer) {
             SurfaceFlingerBridge::Transaction tx;
-            tx.show(surface->sfLayer);
+            if (shouldShow) {
+                tx.show(surface->sfLayer);
+            } else {
+                tx.hide(surface->sfLayer);
+            }
             if (surface->decorLayer) {
                 tx.show(surface->decorLayer);
             }
@@ -1644,6 +1675,7 @@ WaylandSurface* SurfaceBridge::surfaceAt(int32_t screenX, int32_t screenY,
     for (const auto& [res, surf] : mSurfaces) {
         if (!surf || !surf->committed.mapped || !surf->sfLayer || surf->isCursor) continue;
 #ifdef ENABLE_LAYER_SHELL
+        if (surf->isLayerSurface && !mLayerSurfacesVisible) continue;
         if (!surf->xdgToplevel && !surf->xdgPopup && !surf->isSubsurface && !surf->isXwayland && !surf->isLayerSurface) continue;
 #else
         if (!surf->xdgToplevel && !surf->xdgPopup && !surf->isSubsurface && !surf->isXwayland) continue;

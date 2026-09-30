@@ -257,6 +257,7 @@ public:
     int32_t displayHeightMm() const { return mDisplayHeightMm; }
     int32_t navBarHeight()    const { return mNavBarHeight; }
     int32_t statusBarHeight() const { return mStatusBarHeight; }
+    bool    isLayerSurfacesVisible() const { return mLayerSurfacesVisible; }
     float   refreshRate()     const { return mRefreshRate; }
     SurfaceFlingerBridge& getSurfaceFlingerBridge() { return mSfBridge; }
     void destroyLayerForSurface(WaylandSurface* surface);
@@ -280,6 +281,7 @@ private:
     int32_t               mDisplayHeightMm = 0;
     int32_t               mNavBarHeight    = 0;
     int32_t               mStatusBarHeight = 0;
+    bool                  mLayerSurfacesVisible = false;
     float                 mRefreshRate     = 60.0f;
     int32_t               mNextZOrder      = 2000000;
 

@@ -1120,6 +1120,7 @@ void SeatManager::injectVirtualKey(uint32_t timeMs, uint32_t key, uint32_t state
         }
     } else {
         ALOGI("VirtualKeyboard: Key event (key=%u, state=%u) dropped: no focused surface", key, state);
+        mImpl->sendInputMethodDeactivate();
     }
 }
 
@@ -1274,10 +1275,8 @@ void SeatManager::setKeyboardFocus(wl_resource* surfaceResource) {
         updateKeyboardGrabs(true);
     } else {
         // No Wayland window has focus:
-        if (mImpl->activeTextInput) {
-            mImpl->activeTextInput = nullptr;
-            mImpl->sendInputMethodDeactivate();
-        }
+        mImpl->activeTextInput = nullptr;
+        mImpl->sendInputMethodDeactivate();
         // Release typing keyboards so Android can receive all inputs
         updateKeyboardGrabs(false);
     }
@@ -1473,12 +1472,18 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                             int32_t w = surf->committed.width;
                             if (localX >= w - 44) {
                                 ALOGI("Titlebar: Close button hit for surface %u", surf->id);
+                                if (mImpl->currentKeyboardSurface == surf->resource) {
+                                    setKeyboardFocus(nullptr);
+                                }
                                 mImpl->bridge->closeSurface(surf);
                             } else if (localX >= w - 88) {
                                 ALOGI("Titlebar: Maximize button hit for surface %u", surf->id);
                                 mImpl->bridge->toggleMaximize(surf);
                             } else if (localX >= w - 132) {
                                 ALOGI("Titlebar: Minimize button hit for surface %u", surf->id);
+                                if (mImpl->currentKeyboardSurface == surf->resource) {
+                                    setKeyboardFocus(nullptr);
+                                }
                                 mImpl->bridge->minimizeSurface(surf);
                             } else {
                                 ALOGI("Titlebar: Drag grab started for surface %u", surf->id);
@@ -1488,6 +1493,11 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                         }
 
                         if (surf && surf->resource) {
+                            if (surf->isLayerSurface && !mImpl->currentKeyboardSurface) {
+                                ALOGI("SeatManager: Layer surface touched without active Wayland focus -> dismissing virtual keyboard");
+                                mImpl->sendInputMethodDeactivate();
+                                continue;
+                            }
                             if (!surf->isLayerSurface || surf->layerKeyboardInteractivity) {
                                 mImpl->bridge->activateSurface(surf);
                                 setKeyboardFocus(surf->resource);
@@ -1573,11 +1583,8 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                                   surf->id, targetClient, hasTouchResource, slot.screenX, slot.screenY, localX, localY);
                         } else {
                             ALOGI("Touch DOWN at screen (%d, %d) outside any window", slot.screenX, slot.screenY);
-                            if (mImpl->activeTextInput) {
-                                ALOGI("SeatManager: Touch outside Wayland windows -> dismissing virtual keyboard");
-                                mImpl->activeTextInput = nullptr;
-                                mImpl->sendInputMethodDeactivate();
-                            }
+                            mImpl->activeTextInput = nullptr;
+                            mImpl->sendInputMethodDeactivate();
                             if (mImpl->currentKeyboardSurface) {
                                 ALOGI("SeatManager: Touch outside Wayland windows -> releasing keyboard focus to Android");
                                 setKeyboardFocus(nullptr);
