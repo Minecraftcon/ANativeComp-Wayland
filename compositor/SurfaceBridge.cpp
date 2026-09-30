@@ -35,6 +35,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <cassert>
+#include <cmath>
 
 #define LOG_TAG "andwayland:Bridge"
 #define ALOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -735,10 +736,15 @@ static const struct wl_output_interface output_interface = {
 
 SurfaceBridge::SurfaceBridge(SurfaceFlingerBridge& sfBridge)
     : mSfBridge(sfBridge) {
-    auto info      = sfBridge.getDisplayInfo();
-    mDisplayWidth  = info.width;
-    mDisplayHeight = info.height;
-    ALOGI("Display: %dx%d @ %.1fHz", mDisplayWidth, mDisplayHeight, info.refreshRate);
+    auto info         = sfBridge.getDisplayInfo();
+    mDisplayWidth     = info.width;
+    mDisplayHeight    = info.height;
+    mDisplayWidthMm   = info.width_mm;
+    mDisplayHeightMm  = info.height_mm;
+    mRefreshRate      = (info.refreshRate > 0.0f) ? info.refreshRate : 60.0f;
+    ALOGI("Display: %dx%d (physical: %dx%d, %dx%d mm, dpi: %.1fx%.1f) @ %.1fHz",
+          mDisplayWidth, mDisplayHeight, info.physWidth, info.physHeight,
+          mDisplayWidthMm, mDisplayHeightMm, info.xdpi, info.ydpi, mRefreshRate);
 }
 
 SurfaceBridge::~SurfaceBridge() = default;
@@ -832,18 +838,20 @@ void SurfaceBridge::bindOutput(wl_client* client, uint32_t version, uint32_t id)
 
     // Send output geometry
     wl_output_send_geometry(resource,
-        0, 0,                      // x, y (position in global compositor space)
-        0, 0,                      // physical width/height mm (0 = unknown)
+        0, 0,                                // x, y (position in global compositor space)
+        mDisplayWidthMm, mDisplayHeightMm,   // physical width/height mm
         WL_OUTPUT_SUBPIXEL_UNKNOWN,
-        "ANativeDrawer",           // make
-        "Android Display",         // model
+        "ANativeDrawer",                     // make
+        "Android Display",                   // model
         WL_OUTPUT_TRANSFORM_NORMAL);
 
     // Send mode
+    int32_t refreshMhz = static_cast<int32_t>(std::round(mRefreshRate * 1000.0f));
+    if (refreshMhz <= 0) refreshMhz = 60000;
     wl_output_send_mode(resource,
         WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED,
         mDisplayWidth, mDisplayHeight,
-        60000); // 60Hz in mHz
+        refreshMhz);
 
     if (version >= 2) wl_output_send_scale(resource, 1);
     if (version >= 4) {

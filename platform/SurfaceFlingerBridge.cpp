@@ -30,6 +30,7 @@
 #include "SurfaceFlingerBridge.h"
 
 #include <android/log.h>
+#include <cmath>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -175,6 +176,20 @@ DisplayInfo SurfaceFlingerBridge::getDisplayInfo() const {
         pclose(fp);
     }
 
+    // Check "wm density" for physical/override DPI fallback
+    int32_t wmPhysDensity = 0;
+    FILE* fpDens = popen("wm density 2>/dev/null", "r");
+    if (fpDens) {
+        char line[128];
+        while (fgets(line, sizeof(line), fpDens)) {
+            int d = 0;
+            if (sscanf(line, "Physical density: %d", &d) == 1) {
+                wmPhysDensity = d;
+            }
+        }
+        pclose(fpDens);
+    }
+
     if (wmOverrideW > 0 && wmOverrideH > 0) {
         layerStackW = wmOverrideW;
         layerStackH = wmOverrideH;
@@ -185,17 +200,37 @@ DisplayInfo SurfaceFlingerBridge::getDisplayInfo() const {
     if (token && android::SurfaceComposerClient::getActiveDisplayMode(token, &activeMode) == android::NO_ERROR) {
         info.width       = (layerStackW > 0) ? layerStackW : activeMode.resolution.width;
         info.height      = (layerStackH > 0) ? layerStackH : activeMode.resolution.height;
+        info.physWidth   = activeMode.resolution.width;
+        info.physHeight  = activeMode.resolution.height;
         info.xdpi        = activeMode.xDpi;
         info.ydpi        = activeMode.yDpi;
         info.refreshRate = activeMode.refreshRate;
     } else {
         info.width       = (layerStackW > 0) ? layerStackW : (wmPhysW > 0 ? wmPhysW : 720);
         info.height      = (layerStackH > 0) ? layerStackH : (wmPhysH > 0 ? wmPhysH : 1280);
+        info.physWidth   = (wmPhysW > 0) ? wmPhysW : info.width;
+        info.physHeight  = (wmPhysH > 0) ? wmPhysH : info.height;
         info.refreshRate = 60.0f;
     }
 
-    ALOGI("SurfaceFlingerBridge: getDisplayInfo -> %dx%d (layerStack: %dx%d, refresh: %.1fHz)",
-          info.width, info.height, layerStackW, layerStackH, info.refreshRate);
+    if (info.physWidth <= 0) info.physWidth = info.width;
+    if (info.physHeight <= 0) info.physHeight = info.height;
+
+    float effDpiX = (info.xdpi > 10.0f) ? info.xdpi : (wmPhysDensity > 0 ? static_cast<float>(wmPhysDensity) : 160.0f);
+    float effDpiY = (info.ydpi > 10.0f) ? info.ydpi : (wmPhysDensity > 0 ? static_cast<float>(wmPhysDensity) : 160.0f);
+
+    info.width_mm  = static_cast<int32_t>(std::round((static_cast<float>(info.physWidth) * 25.4f) / effDpiX));
+    info.height_mm = static_cast<int32_t>(std::round((static_cast<float>(info.physHeight) * 25.4f) / effDpiY));
+
+    // Handle landscape orientation if active layerStack is rotated
+    if ((info.width > info.height && info.width_mm < info.height_mm) ||
+        (info.width < info.height && info.width_mm > info.height_mm)) {
+        std::swap(info.width_mm, info.height_mm);
+    }
+
+    ALOGI("SurfaceFlingerBridge: getDisplayInfo -> %dx%d (phys: %dx%d, %dx%d mm, dpi: %.1fx%.1f, refresh: %.1fHz)",
+          info.width, info.height, info.physWidth, info.physHeight,
+          info.width_mm, info.height_mm, effDpiX, effDpiY, info.refreshRate);
 
     return info;
 }

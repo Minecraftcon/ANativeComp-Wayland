@@ -32,12 +32,16 @@ struct android_rect_t {
  * Display geometry as reported by SurfaceFlinger.
  */
 struct DisplayInfo {
-    int32_t width;
-    int32_t height;
-    float   xdpi;
-    float   ydpi;
-    float   refreshRate;
-    int32_t orientation; // Surface::ROTATION_0/90/180/270
+    int32_t width        = 0;
+    int32_t height       = 0;
+    int32_t physWidth    = 0;
+    int32_t physHeight   = 0;
+    int32_t width_mm     = 0;
+    int32_t height_mm    = 0;
+    float   xdpi         = 0.0f;
+    float   ydpi         = 0.0f;
+    float   refreshRate  = 60.0f;
+    int32_t orientation  = 0; // Surface::ROTATION_0/90/180/270
 };
 
 /**

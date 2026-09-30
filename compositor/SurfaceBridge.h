@@ -220,8 +220,11 @@ public:
     bool isMoveGrabActive() const { return mGrabSurface != nullptr; }
 
     // Display info (forwarded from SurfaceFlingerBridge)
-    int32_t displayWidth()  const { return mDisplayWidth; }
-    int32_t displayHeight() const { return mDisplayHeight; }
+    int32_t displayWidth()    const { return mDisplayWidth; }
+    int32_t displayHeight()   const { return mDisplayHeight; }
+    int32_t displayWidthMm()  const { return mDisplayWidthMm; }
+    int32_t displayHeightMm() const { return mDisplayHeightMm; }
+    float   refreshRate()     const { return mRefreshRate; }
     SurfaceFlingerBridge& getSurfaceFlingerBridge() { return mSfBridge; }
     void destroyLayerForSurface(WaylandSurface* surface);
 
@@ -238,9 +241,12 @@ private:
     int32_t allocateZOrder();
 
     SurfaceFlingerBridge& mSfBridge;
-    int32_t               mDisplayWidth  = 0;
-    int32_t               mDisplayHeight = 0;
-    int32_t               mNextZOrder    = 2000000;
+    int32_t               mDisplayWidth    = 0;
+    int32_t               mDisplayHeight   = 0;
+    int32_t               mDisplayWidthMm  = 0;
+    int32_t               mDisplayHeightMm = 0;
+    float                 mRefreshRate     = 60.0f;
+    int32_t               mNextZOrder      = 2000000;
 
     SeatManager*          mSeat          = nullptr;
     WaylandSurface*       mActiveSurface = nullptr;
