@@ -232,6 +232,7 @@ public:
     void bindLayerShell(wl_client* client, uint32_t version, uint32_t id);
     void getLayerSurface(wl_client* client, uint32_t id, wl_resource* surfaceResource,
                          wl_resource* outputResource, uint32_t layer, const char* scope, int version = 1);
+    void setLayerSurfacesVisible(bool visible);
 
     // ── Window Controls ───────────────────────────────────────────────────────
     void toggleMaximize(WaylandSurface* surface);
@@ -254,6 +255,8 @@ public:
     int32_t displayHeight()   const { return mDisplayHeight; }
     int32_t displayWidthMm()  const { return mDisplayWidthMm; }
     int32_t displayHeightMm() const { return mDisplayHeightMm; }
+    int32_t navBarHeight()    const { return mNavBarHeight; }
+    int32_t statusBarHeight() const { return mStatusBarHeight; }
     float   refreshRate()     const { return mRefreshRate; }
     SurfaceFlingerBridge& getSurfaceFlingerBridge() { return mSfBridge; }
     void destroyLayerForSurface(WaylandSurface* surface);
@@ -275,6 +278,8 @@ private:
     int32_t               mDisplayHeight   = 0;
     int32_t               mDisplayWidthMm  = 0;
     int32_t               mDisplayHeightMm = 0;
+    int32_t               mNavBarHeight    = 0;
+    int32_t               mStatusBarHeight = 0;
     float                 mRefreshRate     = 60.0f;
     int32_t               mNextZOrder      = 2000000;
 

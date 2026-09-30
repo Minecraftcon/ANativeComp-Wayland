@@ -891,6 +891,26 @@ void SurfaceBridge::getLayerSurface(wl_client* client, uint32_t id,
     ALOGI("getLayerSurface: Created layer surface for surface %u (scope: '%s', layer: %u)",
           surface->id, scope ? scope : "default", layer);
 }
+
+void SurfaceBridge::setLayerSurfacesVisible(bool visible) {
+    SurfaceFlingerBridge::Transaction tx;
+    bool hasChanges = false;
+    for (auto& [res, surf] : mSurfaces) {
+        if (surf && surf->isLayerSurface && surf->sfLayer) {
+            surf->committed.mapped = visible;
+            if (visible) {
+                tx.show(surf->sfLayer);
+            } else {
+                tx.hide(surf->sfLayer);
+            }
+            hasChanges = true;
+            ALOGI("LayerSurface: surface %u setVisible=%d", surf->id, visible);
+        }
+    }
+    if (hasChanges) {
+        tx.apply();
+    }
+}
 #endif
 
 
@@ -905,6 +925,30 @@ static const struct wl_output_interface output_interface = {
 // SurfaceBridge
 // ─────────────────────────────────────────────────────────────────────────────
 
+static void querySystemInsets(int32_t& outNavBarH, int32_t& outStatusBarH) {
+    outNavBarH = 0;
+    outStatusBarH = 0;
+    FILE* fp = popen("dumpsys window 2>/dev/null | grep -E 'ITYPE_NAVIGATION_BAR|ITYPE_STATUS_BAR'", "r");
+    if (!fp) return;
+    char line[256];
+    while (fgets(line, sizeof(line), fp)) {
+        if (strstr(line, "ITYPE_NAVIGATION_BAR") && strstr(line, "visible=true")) {
+            int x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+            const char* p = strstr(line, "frame=[");
+            if (p && sscanf(p, "frame=[%d,%d][%d,%d]", &x1, &y1, &x2, &y2) == 4) {
+                outNavBarH = std::max(0, y2 - y1);
+            }
+        } else if (strstr(line, "ITYPE_STATUS_BAR") && strstr(line, "visible=true")) {
+            int x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+            const char* p = strstr(line, "frame=[");
+            if (p && sscanf(p, "frame=[%d,%d][%d,%d]", &x1, &y1, &x2, &y2) == 4) {
+                outStatusBarH = std::max(0, y2 - y1);
+            }
+        }
+    }
+    pclose(fp);
+}
+
 SurfaceBridge::SurfaceBridge(SurfaceFlingerBridge& sfBridge)
     : mSfBridge(sfBridge) {
     auto info         = sfBridge.getDisplayInfo();
@@ -913,9 +957,11 @@ SurfaceBridge::SurfaceBridge(SurfaceFlingerBridge& sfBridge)
     mDisplayWidthMm   = info.width_mm;
     mDisplayHeightMm  = info.height_mm;
     mRefreshRate      = (info.refreshRate > 0.0f) ? info.refreshRate : 60.0f;
-    ALOGI("Display: %dx%d (physical: %dx%d, %dx%d mm, dpi: %.1fx%.1f) @ %.1fHz",
+    querySystemInsets(mNavBarHeight, mStatusBarHeight);
+    ALOGI("Display: %dx%d (physical: %dx%d, %dx%d mm, dpi: %.1fx%.1f) @ %.1fHz, insets(status=%d, nav=%d)",
           mDisplayWidth, mDisplayHeight, info.physWidth, info.physHeight,
-          mDisplayWidthMm, mDisplayHeightMm, info.xdpi, info.ydpi, mRefreshRate);
+          mDisplayWidthMm, mDisplayHeightMm, info.xdpi, info.ydpi, mRefreshRate,
+          mStatusBarHeight, mNavBarHeight);
 }
 
 SurfaceBridge::~SurfaceBridge() = default;
@@ -1054,7 +1100,8 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
             uint32_t targetW = surface->layerDesiredWidth > 0 ? surface->layerDesiredWidth : mDisplayWidth;
             uint32_t targetH = surface->layerDesiredHeight > 0 ? surface->layerDesiredHeight :
                                ((surface->layerAnchor & (ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM)) ==
-                                (ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM) ? mDisplayHeight : 400);
+                                (ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM) ?
+                                (mDisplayHeight - mNavBarHeight - mStatusBarHeight) : 400);
             zwlr_layer_surface_v1_send_configure(surface->layerSurfaceResource, serial, targetW, targetH);
             ALOGI("LayerSurface: sent configure for surface %u: %ux%u (anchor 0x%x, desired %ux%u, serial %u)",
                   surface->id, targetW, targetH, surface->layerAnchor,
@@ -1119,11 +1166,11 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
 #ifdef ENABLE_LAYER_SHELL
             if (surface->isLayerSurface) {
                 if (surface->layerAnchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM) {
-                    posY = mDisplayHeight - layerH;
+                    posY = (mDisplayHeight - mNavBarHeight) - layerH;
                 } else if (surface->layerAnchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP) {
-                    posY = 0;
+                    posY = mStatusBarHeight;
                 } else {
-                    posY = (mDisplayHeight - layerH) / 2;
+                    posY = (mDisplayHeight - mNavBarHeight - layerH) / 2;
                 }
 
                 if (surface->layerAnchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT) {
@@ -1238,9 +1285,9 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
         int32_t targetX = surface->committed.x;
         int32_t targetY = surface->committed.y;
         if (surface->layerAnchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM) {
-            targetY = mDisplayHeight - surface->committed.height;
+            targetY = (mDisplayHeight - mNavBarHeight) - surface->committed.height;
         } else if (surface->layerAnchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP) {
-            targetY = 0;
+            targetY = mStatusBarHeight;
         }
         if (surface->layerAnchor & ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT) {
             targetX = 0;
@@ -1259,6 +1306,15 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
 
     // ── 2. Copy/import the buffer ─────────────────────────────────────────────
     if (surface->pending.hasBuffer && surface->pending.buffer) {
+        surface->committed.mapped = true;
+        if (surface->sfLayer) {
+            SurfaceFlingerBridge::Transaction tx;
+            tx.show(surface->sfLayer);
+            if (surface->decorLayer) {
+                tx.show(surface->decorLayer);
+            }
+            tx.apply();
+        }
         if (surface->sfLayer) {
             if (wl_shm_buffer_get(surface->pending.buffer)) {
                 blitShmBuffer(surface, surface->pending.buffer);
@@ -1277,6 +1333,19 @@ void SurfaceBridge::commitSurface(WaylandSurface* surface) {
         surface->pending.hasBuffer = false;
         // Damage is consumed by this commit.
         surface->pending.damage.clear();
+    } else if (surface->pending.hasBuffer && !surface->pending.buffer) {
+        // Attaching a NULL buffer unmaps the surface per Wayland specification
+        surface->committed.mapped = false;
+        surface->pending.hasBuffer = false;
+        if (surface->sfLayer) {
+            SurfaceFlingerBridge::Transaction tx;
+            tx.hide(surface->sfLayer);
+            if (surface->decorLayer) {
+                tx.hide(surface->decorLayer);
+            }
+            tx.apply();
+        }
+        ALOGI("Surface %u unmapped via NULL buffer", surface->id);
     }
 
     // ── 3. Fire frame callbacks ───────────────────────────────────────────────
@@ -1560,6 +1629,15 @@ void SurfaceBridge::destroyLayerForSurface(WaylandSurface* surface) {
 
 WaylandSurface* SurfaceBridge::surfaceAt(int32_t screenX, int32_t screenY,
                                         int32_t* outLocalX, int32_t* outLocalY) {
+    // If the touch is within the Android Navigation Bar region at the bottom
+    // or Status Bar region at the top, yield it to Android system UI.
+    if (mNavBarHeight > 0 && screenY >= (mDisplayHeight - mNavBarHeight)) {
+        return nullptr;
+    }
+    if (mStatusBarHeight > 0 && screenY < mStatusBarHeight) {
+        return nullptr;
+    }
+
     WaylandSurface* best = nullptr;
     int32_t bestZ = -1;
 
@@ -1813,7 +1891,7 @@ void SurfaceBridge::toggleMaximize(WaylandSurface* surface) {
             uint32_t* m = static_cast<uint32_t*>(wl_array_add(&states, sizeof(uint32_t)));
             *m = XDG_TOPLEVEL_STATE_MAXIMIZED;
             int32_t decorH = surface->hasDecor ? surface->decorHeight : 0;
-            xdg_toplevel_send_configure(surface->xdgToplevel, mDisplayWidth, mDisplayHeight - decorH, &states);
+            xdg_toplevel_send_configure(surface->xdgToplevel, mDisplayWidth, mDisplayHeight - decorH - mNavBarHeight, &states);
             moveSurface(surface, 0, decorH);
         } else {
             xdg_toplevel_send_configure(surface->xdgToplevel, 0, 0, &states);

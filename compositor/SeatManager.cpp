@@ -202,6 +202,9 @@ struct SeatManager::Impl {
 
     void sendInputMethodActivate(TextInputV3Resource* ti) {
         ALOGI("TextInput: Activating virtual keyboard for text field");
+        if (bridge) {
+            bridge->setLayerSurfacesVisible(true);
+        }
         for (auto* im : inputMethods) {
             zwp_input_method_v2_send_activate(im->resource);
             if (ti && ti->current.surroundingChanged) {
@@ -226,6 +229,9 @@ struct SeatManager::Impl {
 
     void sendInputMethodDeactivate() {
         ALOGI("TextInput: Deactivating virtual keyboard");
+        if (bridge) {
+            bridge->setLayerSurfacesVisible(false);
+        }
         for (auto* im : inputMethods) {
             if (im->active) {
                 zwp_input_method_v2_send_deactivate(im->resource);
@@ -1094,6 +1100,16 @@ void SeatManager::injectVirtualKey(uint32_t timeMs, uint32_t key, uint32_t state
         clock_gettime(CLOCK_MONOTONIC, &ts);
         timeMs = static_cast<uint32_t>(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
     }
+
+    // Dismiss virtual keyboard if Escape is tapped on the virtual keyboard
+    if (key == KEY_ESC && state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+        if (mImpl->activeTextInput) {
+            ALOGI("VirtualKeyboard: ESC key pressed -> dismissing virtual keyboard");
+            mImpl->activeTextInput = nullptr;
+            mImpl->sendInputMethodDeactivate();
+        }
+    }
+
     uint32_t serial = wl_display_next_serial(mImpl->display);
     if (mImpl->currentKeyboardSurface) {
         struct wl_client* targetClient = wl_resource_get_client(mImpl->currentKeyboardSurface);
@@ -1409,6 +1425,16 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                         return 1;
                     }
 
+                    // Android Back key or Home key dismisses active virtual keyboard
+                    if (ev.value == 1 && (ev.code == KEY_BACK || ev.code == KEY_HOMEPAGE)) {
+                        if (mImpl->activeTextInput) {
+                            ALOGI("SeatManager: KEY_BACK pressed -> dismissing active virtual keyboard");
+                            mImpl->activeTextInput = nullptr;
+                            mImpl->sendInputMethodDeactivate();
+                            return 1;
+                        }
+                    }
+
                     uint32_t serial = wl_display_next_serial(mImpl->display);
                     uint32_t state = ev.value ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED;
                     if (mImpl->currentKeyboardSurface) {
@@ -1547,6 +1573,11 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
                                   surf->id, targetClient, hasTouchResource, slot.screenX, slot.screenY, localX, localY);
                         } else {
                             ALOGI("Touch DOWN at screen (%d, %d) outside any window", slot.screenX, slot.screenY);
+                            if (mImpl->activeTextInput) {
+                                ALOGI("SeatManager: Touch outside Wayland windows -> dismissing virtual keyboard");
+                                mImpl->activeTextInput = nullptr;
+                                mImpl->sendInputMethodDeactivate();
+                            }
                             if (mImpl->currentKeyboardSurface) {
                                 ALOGI("SeatManager: Touch outside Wayland windows -> releasing keyboard focus to Android");
                                 setKeyboardFocus(nullptr);
