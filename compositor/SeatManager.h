@@ -55,9 +55,10 @@ public:
     void createTextInput(wl_client* client, uint32_t id);
     void createInputMethod(wl_client* client, uint32_t id);
 
-    /** Virtual Keyboard injection */
+    /** Virtual Keyboard / IME injection */
     void injectVirtualKey(uint32_t timeMs, uint32_t key, uint32_t state);
     void injectVirtualModifiers(uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group);
+    void commitTextFromIme(const std::string& text);
 
     /** Set the currently focused surface for keyboard events. */
     void setKeyboardFocus(wl_resource* surfaceResource);

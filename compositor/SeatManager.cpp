@@ -26,6 +26,8 @@
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <sys/inotify.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
@@ -173,35 +175,155 @@ struct SeatManager::Impl {
 
     std::vector<InputMethodV2Resource*> inputMethods;
 
-    void triggerVirtualKeyboardVisibility(bool show) {
-        DIR* proc = opendir("/proc");
-        if (!proc) return;
-        struct dirent* entry;
-        while ((entry = readdir(proc)) != nullptr) {
-            if (entry->d_type != DT_DIR) continue;
-            char* endptr = nullptr;
-            pid_t pid = strtol(entry->d_name, &endptr, 10);
-            if (!endptr || *endptr != '\0' || pid <= 0) continue;
-            char cmdlinePath[64];
-            snprintf(cmdlinePath, sizeof(cmdlinePath), "/proc/%d/cmdline", pid);
-            FILE* f = fopen(cmdlinePath, "r");
-            if (f) {
-                char cmd[128];
-                size_t n = fread(cmd, 1, sizeof(cmd) - 1, f);
-                fclose(f);
-                if (n > 0) {
-                    cmd[n] = '\0';
-                    if (strstr(cmd, "wvkbd") != nullptr) {
-                        kill(pid, show ? SIGUSR2 : SIGUSR1);
+    int imeServerFd = -1;
+    int imeClientFd = -1;
+    struct wl_event_source* imeServerSource = nullptr;
+    struct wl_event_source* imeClientSource = nullptr;
+    std::string imeReadBuf;
+    SeatManager* owner = nullptr;
+
+    void setupImeBridge() {
+        if (!eventLoop) return;
+        imeServerFd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        if (imeServerFd < 0) {
+            ALOGE("SeatManager: Failed to create IME socket: %s", strerror(errno));
+            return;
+        }
+
+        struct sockaddr_un addr{};
+        addr.sun_family = AF_UNIX;
+        addr.sun_path[0] = '\0';
+        const char* sockName = "andwayland_ime";
+        memcpy(addr.sun_path + 1, sockName, strlen(sockName));
+        socklen_t addrLen = sizeof(sa_family_t) + 1 + strlen(sockName);
+
+        if (bind(imeServerFd, reinterpret_cast<struct sockaddr*>(&addr), addrLen) < 0) {
+            ALOGE("SeatManager: Failed to bind abstract socket @%s: %s", sockName, strerror(errno));
+            close(imeServerFd);
+            imeServerFd = -1;
+            return;
+        }
+
+        if (listen(imeServerFd, 4) < 0) {
+            ALOGE("SeatManager: Failed to listen on socket @%s: %s", sockName, strerror(errno));
+            close(imeServerFd);
+            imeServerFd = -1;
+            return;
+        }
+
+        imeServerSource = wl_event_loop_add_fd(
+            eventLoop, imeServerFd, WL_EVENT_READABLE,
+            [](int fd, uint32_t mask, void* data) -> int {
+                auto* impl = static_cast<SeatManager::Impl*>(data);
+                impl->handleImeServerAccept();
+                return 0;
+            },
+            this);
+
+        ALOGI("SeatManager: Android IME bridge listening on abstract socket @%s", sockName);
+    }
+
+    void handleImeServerAccept() {
+        int clientFd = accept4(imeServerFd, nullptr, nullptr, SOCK_NONBLOCK | SOCK_CLOEXEC);
+        if (clientFd < 0) return;
+
+        if (imeClientSource) {
+            wl_event_source_remove(imeClientSource);
+            imeClientSource = nullptr;
+        }
+        if (imeClientFd >= 0) {
+            close(imeClientFd);
+        }
+
+        imeClientFd = clientFd;
+        imeReadBuf.clear();
+
+        imeClientSource = wl_event_loop_add_fd(
+            eventLoop, imeClientFd, WL_EVENT_READABLE,
+            [](int fd, uint32_t mask, void* data) -> int {
+                auto* impl = static_cast<SeatManager::Impl*>(data);
+                impl->handleImeClientData();
+                return 0;
+            },
+            this);
+
+        ALOGI("SeatManager: Android IME companion connected (fd=%d)", clientFd);
+
+        if (activeTextInput && activeTextInput->current.enabled) {
+            sendImeMessage("SHOW\n");
+        }
+    }
+
+    void handleImeClientData() {
+        char buf[512];
+        ssize_t n = read(imeClientFd, buf, sizeof(buf));
+        if (n <= 0) {
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
+            ALOGI("SeatManager: Android IME companion disconnected");
+            if (imeClientSource) {
+                wl_event_source_remove(imeClientSource);
+                imeClientSource = nullptr;
+            }
+            close(imeClientFd);
+            imeClientFd = -1;
+            return;
+        }
+
+        imeReadBuf.append(buf, n);
+        size_t pos;
+        while ((pos = imeReadBuf.find('\n')) != std::string::npos) {
+            std::string line = imeReadBuf.substr(0, pos);
+            imeReadBuf.erase(0, pos + 1);
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            processImeCommand(line);
+        }
+    }
+
+    void processImeCommand(const std::string& cmd) {
+        if (cmd.rfind("COMMIT ", 0) == 0) {
+            std::string text = cmd.substr(7);
+            if (activeTextInput) {
+                zwp_text_input_v3_send_commit_string(activeTextInput->resource, text.c_str());
+                uint32_t next_serial = display ? wl_display_next_serial(display) : 0;
+                zwp_text_input_v3_send_done(activeTextInput->resource, next_serial);
+            } else if (currentKeyboardSurface && owner) {
+                for (char c : text) {
+                    if (c == '\n') {
+                        owner->injectVirtualKey(0, 28, 1);
+                        owner->injectVirtualKey(0, 28, 0);
+                    } else if (c == ' ') {
+                        owner->injectVirtualKey(0, 57, 1);
+                        owner->injectVirtualKey(0, 57, 0);
                     }
                 }
             }
+            ALOGI("SeatManager: IME committed text '%s'", text.c_str());
+        } else if (cmd.rfind("KEY ", 0) == 0) {
+            uint32_t key = 0;
+            uint32_t state = 0;
+            if (sscanf(cmd.c_str() + 4, "%u %u", &key, &state) == 2 && owner) {
+                owner->injectVirtualKey(0, key, state);
+            }
+        } else if (cmd == "DISMISSED") {
+            ALOGI("SeatManager: IME dismissed by user");
+            if (activeTextInput) {
+                activeTextInput = nullptr;
+                sendInputMethodDeactivate();
+            }
         }
-        closedir(proc);
+    }
+
+    void sendImeMessage(const char* msg) {
+        if (imeClientFd >= 0) {
+            write(imeClientFd, msg, strlen(msg));
+        }
     }
 
     void sendInputMethodActivate(TextInputV3Resource* ti) {
-        ALOGI("TextInput: Activating virtual keyboard for text field");
+        ALOGI("TextInput: Activating Android soft keyboard for text field");
+        sendImeMessage("SHOW\n");
         if (bridge) {
             bridge->setLayerSurfacesVisible(true);
         }
@@ -224,11 +346,11 @@ struct SeatManager::Impl {
             zwp_input_method_v2_send_done(im->resource);
             im->active = true;
         }
-        triggerVirtualKeyboardVisibility(true);
     }
 
     void sendInputMethodDeactivate() {
-        ALOGI("TextInput: Deactivating virtual keyboard");
+        ALOGI("TextInput: Deactivating Android soft keyboard");
+        sendImeMessage("HIDE\n");
         if (bridge) {
             bridge->setLayerSurfacesVisible(false);
         }
@@ -240,7 +362,6 @@ struct SeatManager::Impl {
                 im->active = false;
             }
         }
-        triggerVirtualKeyboardVisibility(false);
     }
 
     void sendInputMethodState(TextInputV3Resource* ti) {
@@ -696,7 +817,9 @@ static const struct zwp_input_method_manager_v2_interface im_mgr_iface = {
 // ─────────────────────────────────────────────────────────────────────────────
 // SeatManager Lifecycle
 // ─────────────────────────────────────────────────────────────────────────────
-SeatManager::SeatManager() : mImpl(std::make_unique<Impl>()) {}
+SeatManager::SeatManager() : mImpl(std::make_unique<Impl>()) {
+    mImpl->owner = this;
+}
 
 SeatManager::~SeatManager() {
     stop();
@@ -712,6 +835,7 @@ bool SeatManager::start(wl_display* display, wl_event_loop* loop, std::shared_pt
     mImpl->bridge = bridge;
 
     mImpl->prepareKeymap();
+    mImpl->setupImeBridge();
 
     mImpl->gesture.holdTimerSource = wl_event_loop_add_timer(
         mImpl->eventLoop,
@@ -929,6 +1053,22 @@ void SeatManager::stop() {
     if (mImpl->gesture.holdTimerSource) {
         wl_event_source_remove(mImpl->gesture.holdTimerSource);
         mImpl->gesture.holdTimerSource = nullptr;
+    }
+    if (mImpl->imeClientSource) {
+        wl_event_source_remove(mImpl->imeClientSource);
+        mImpl->imeClientSource = nullptr;
+    }
+    if (mImpl->imeClientFd >= 0) {
+        close(mImpl->imeClientFd);
+        mImpl->imeClientFd = -1;
+    }
+    if (mImpl->imeServerSource) {
+        wl_event_source_remove(mImpl->imeServerSource);
+        mImpl->imeServerSource = nullptr;
+    }
+    if (mImpl->imeServerFd >= 0) {
+        close(mImpl->imeServerFd);
+        mImpl->imeServerFd = -1;
     }
     for (auto& dev : mImpl->devices) {
         if (dev.isGrabbed && dev.fd >= 0) {
@@ -1791,6 +1931,14 @@ int SeatManager::handleEvdevEvent(int fd, uint32_t mask) {
         }
     }
     return 0;
+}
+
+void SeatManager::commitTextFromIme(const std::string& text) {
+    if (mImpl->activeTextInput) {
+        zwp_text_input_v3_send_commit_string(mImpl->activeTextInput->resource, text.c_str());
+        uint32_t next_serial = mImpl->display ? wl_display_next_serial(mImpl->display) : 0;
+        zwp_text_input_v3_send_done(mImpl->activeTextInput->resource, next_serial);
+    }
 }
 
 } // namespace andwayland

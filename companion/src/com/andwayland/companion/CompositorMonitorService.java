@@ -27,10 +27,12 @@ public class CompositorMonitorService extends Service {
 
     public static final String ACTION_RESTART = "com.andwayland.companion.ACTION_RESTART";
     public static final String ACTION_STOP = "com.andwayland.companion.ACTION_STOP";
+    public static final String ACTION_TOGGLE_KEYBOARD = "com.andwayland.companion.ACTION_TOGGLE_KEYBOARD";
 
     private HandlerThread workerThread;
     private Handler workerHandler;
     private Boolean lastReportedRunning = null;
+    private AndroidImeBridge imeBridge;
 
     private final Runnable pollRunnable = new Runnable() {
         @Override
@@ -51,6 +53,10 @@ public class CompositorMonitorService extends Service {
                 CompositorRepository.getInstance().restartDaemon();
             } else if (ACTION_STOP.equals(action)) {
                 CompositorRepository.getInstance().stopDaemon();
+            } else if (ACTION_TOGGLE_KEYBOARD.equals(action)) {
+                if (imeBridge != null) {
+                    imeBridge.toggleIme();
+                }
             }
         }
     };
@@ -63,7 +69,11 @@ public class CompositorMonitorService extends Service {
         IntentFilter filter = new IntentFilter();
         filter.addAction(ACTION_RESTART);
         filter.addAction(ACTION_STOP);
+        filter.addAction(ACTION_TOGGLE_KEYBOARD);
         registerReceiver(actionReceiver, filter);
+
+        imeBridge = new AndroidImeBridge(this);
+        imeBridge.start();
 
         workerThread = new HandlerThread("CompositorPoller");
         workerThread.start();
@@ -123,6 +133,11 @@ public class CompositorMonitorService extends Service {
                 this, 2, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
 
+        Intent kbIntent = new Intent(ACTION_TOGGLE_KEYBOARD);
+        PendingIntent kbPending = PendingIntent.getBroadcast(
+                this, 3, kbIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
         String title = "ANativeDrawer Wayland";
         String contentText = running
                 ? "Wayland is running (Socket: wayland-0)"
@@ -144,6 +159,8 @@ public class CompositorMonitorService extends Service {
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setShowWhen(false)
+                .addAction(new Notification.Action.Builder(
+                        null, "Keyboard", kbPending).build())
                 .addAction(new Notification.Action.Builder(
                         null, "Configure", pendingIntent).build())
                 .addAction(new Notification.Action.Builder(
@@ -173,6 +190,9 @@ public class CompositorMonitorService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        if (imeBridge != null) {
+            imeBridge.stop();
+        }
         try {
             unregisterReceiver(actionReceiver);
         } catch (Exception ignored) {

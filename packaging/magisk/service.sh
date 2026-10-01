@@ -92,29 +92,10 @@ EOF
     fi
 fi
 
-# ─── Virtual Keyboard Autostart (hidden & auto-activated via IME) ─────────────
-WVKBD_BIN="$TERMUX_PREFIX/bin/wvkbd-mobintl"
-if [ -x "$WVKBD_BIN" ] && [ -n "$TERMUX_UID" ]; then
     # Generate GTK3 immodules cache if missing so GTK automatically uses Wayland IM
     if [ -x "$TERMUX_PREFIX/bin/gtk-query-immodules-3.0" ] && [ ! -f "$TERMUX_PREFIX/lib/gtk-3.0/3.0.0/immodules.cache" ]; then
         su $TERMUX_UID -c "$TERMUX_PREFIX/bin/gtk-query-immodules-3.0 > $TERMUX_PREFIX/lib/gtk-3.0/3.0.0/immodules.cache" 2>/dev/null || true
     fi
-
-    cat << EOF > /data/wayland/run_wvkbd.sh
-#!/system/bin/sh
-export PATH="$TERMUX_PREFIX/bin:\$PATH"
-export LD_LIBRARY_PATH="$TERMUX_PREFIX/lib:$MODDIR/system/lib64:\$LD_LIBRARY_PATH"
-export XDG_RUNTIME_DIR=/data/wayland
-export WAYLAND_DISPLAY=wayland-0
-exec $WVKBD_BIN --hidden --auto -H 350
-EOF
-    chmod 755 /data/wayland/run_wvkbd.sh
-    chown $TERMUX_UID:$TERMUX_UID /data/wayland/run_wvkbd.sh
-    pkill -f wvkbd-mobintl 2>/dev/null || true
-    su $TERMUX_UID -c /data/wayland/run_wvkbd.sh >/dev/null 2>&1 &
-    echo "wvkbd-mobintl started in background (--hidden --auto) (UID $TERMUX_UID)" >> "$LOG"
-fi
-# ─────────────────────────────────────────────────────────────────────────────
 
 # Ensure Magisk SU grant toasts are silenced for companion app
 COMPANION_UID=$(pm list packages -U 2>/dev/null | grep com.andwayland.companion | sed 's/.*uid://' | head -n 1)
